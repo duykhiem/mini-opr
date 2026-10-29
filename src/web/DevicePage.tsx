@@ -1,9 +1,10 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import type { JoinResult } from "../device/syncClient.ts";
+import type { JoinResult, LoggedEvent } from "../device/syncClient.ts";
 import type { Event, Vitals } from "../shared/event.ts";
 import { isActive, type Incident } from "../shared/incident.ts";
 import { applyEvent, compareStamps, emptyPatient } from "../shared/patient.ts";
 import type { Resource } from "../shared/resource.ts";
+import { Composer } from "./Composer.tsx";
 import { useDeviceLock } from "./useDeviceLock.ts";
 import { useResources } from "./useResources.ts";
 import { useSyncClient } from "./useSyncClient.ts";
@@ -61,7 +62,7 @@ function ResourcePicker(props: { resources: Resource[]; resourceId: string | nul
 
 function Device(props: { resourceId: string; resourceName: (id: string) => string; picker: ReactNode }) {
   const { resourceId, resourceName } = props;
-  const { state, join } = useSyncClient(resourceId);
+  const { deviceId, state, join, record } = useSyncClient(resourceId);
   const [incidentId, setIncidentId] = useState<string | null>(null);
   const incident = state.incidents.find((i) => i.incidentId === incidentId);
 
@@ -88,8 +89,13 @@ function Device(props: { resourceId: string; resourceName: (id: string) => strin
       </section>
       {incident && (
         <IncidentView
+          key={incident.incidentId}
           incident={incident}
           events={state.received.filter((e) => e.incidentId === incident.incidentId)}
+          log={state.log.filter((e) => e.event.incidentId === incident.incidentId)}
+          offset={state.offset}
+          device={{ deviceId, resourceId }}
+          onEvent={record}
           resourceName={resourceName}
         />
       )}
@@ -145,11 +151,24 @@ function joinFailure(reason: Exclude<JoinResult, { ok: true }>["reason"], incide
   }
 }
 
-function IncidentView(props: { incident: Incident; events: Event[]; resourceName: (id: string) => string }) {
+function IncidentView(props: {
+  incident: Incident;
+  events: Event[]; // received from the Coordinator
+  log: LoggedEvent[]; // this Device's own events in the Incident
+  offset: number;
+  device: { deviceId: string; resourceId: string };
+  onEvent: (event: Event) => void;
+  resourceName: (id: string) => string;
+}) {
   const { incident, resourceName } = props;
-  const events = [...props.events].sort(compareStamps);
+  const [view, setView] = useState<"feed" | "log">("feed");
+  // The Device's own events show at once, before the Coordinator stores them.
+  const received = new Set(props.events.map((e) => e.eventId));
+  const events = [...props.events, ...props.log.map((e) => e.event).filter((e) => !received.has(e.eventId))].sort(compareStamps);
   const patient = events.reduce(applyEvent, emptyPatient);
   const latestVitals = patient.vitals.at(-1)?.vitals;
+  // The Resource writes under its latest Transfer leg in the Incident (ADR 0003).
+  const leg = incident.legs.findLast((l) => l.resourceId === props.device.resourceId);
 
   return (
     <section>
@@ -174,14 +193,44 @@ function IncidentView(props: { incident: Incident; events: Event[]; resourceName
           </li>
         ))}
       </ul>
-      <h3>Feed</h3>
-      <ol>
-        {events.map((e) => (
-          <li key={e.eventId}>
-            {new Date(e.enteredAt).toLocaleTimeString()} {sourceLabel(e, resourceName)}: {describeEvent(e)}
-          </li>
-        ))}
-      </ol>
+      <div className="view-toggle" role="group" aria-label="View">
+        <button type="button" aria-pressed={view === "feed"} onClick={() => setView("feed")}>
+          Feed
+        </button>
+        <button type="button" aria-pressed={view === "log"} onClick={() => setView("log")}>
+          My Event log
+        </button>
+      </div>
+      {view === "feed" ? (
+        <ol>
+          {events.map((e) => (
+            <li key={e.eventId}>
+              {new Date(e.enteredAt).toLocaleTimeString()} {sourceLabel(e, resourceName)}: {describeEvent(e)}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <ol>
+          {props.log.length === 0 && <li>No events from this Device yet.</li>}
+          {props.log.map(({ seq, event }) => (
+            <li key={event.eventId}>
+              #{seq} {new Date(event.enteredAt).toLocaleTimeString()} {describeEvent(event)} ({seq <= props.offset ? "stored" : "waiting"})
+            </li>
+          ))}
+        </ol>
+      )}
+      {leg && (
+        // Completing a leg and locking a Closed Incident come in #23.
+        <Composer
+          incidentId={incident.incidentId}
+          patientId={incident.patientId}
+          device={{ ...props.device, legId: leg.legId }}
+          clock={Date.now}
+          holdsActiveLeg={false}
+          locked={false}
+          onEvent={props.onEvent}
+        />
+      )}
     </section>
   );
 }

@@ -1,14 +1,19 @@
 import type { Event } from "../shared/event.ts";
 import type { Incident } from "../shared/incident.ts";
-import type { CoordinatorMessage, DeviceMessage, JoinRejectReason } from "../shared/protocol.ts";
+import type { CoordinatorMessage, DeviceMessage, JoinRejectReason, LoggedEvent } from "../shared/protocol.ts";
+import { openReconnecting, type ReconnectingSocket } from "../shared/reconnect.ts";
 
 // The part of localStorage the client uses, so tests can pass an in-memory one.
 export type KeyValueStore = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+// A LoggedEvent is stored on the Coordinator once its seq is at or below the Offset.
+export type { LoggedEvent };
 
 export type SyncState = {
   online: boolean;
   epoch: string | null;
   offset: number;
+  log: LoggedEvent[]; // this Device's own events, in seq order
   snapshotReceived: boolean;
   incidents: Incident[];
   received: Event[];
@@ -21,6 +26,8 @@ export type JoinResult = { ok: true } | { ok: false; reason: "offline" | JoinRej
 export type SyncClient = {
   start(): void;
   stop(): void;
+  // Writes the Event to the Event log with the next seq, then pushes it if the Device is welcomed.
+  record(event: Event): void;
   // Join needs the network: it goes over this Device's socket and never waits for a reconnect.
   join(incidentId: string): Promise<JoinResult>;
   getState(): SyncState;
@@ -34,10 +41,6 @@ export type SyncClientOptions = {
   storage: KeyValueStore;
   createSocket: (url: string) => WebSocket;
 };
-
-const pingIntervalMs = 5000;
-const pongTimeoutMs = 10_000;
-const backoffMs = [500, 1000, 2000, 4000, 5000];
 
 // Framework-free: the caller passes the storage and the WebSocket, so it runs in the browser and in Node.
 export function createSyncClient(options: SyncClientOptions): SyncClient {
@@ -53,18 +56,17 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     online: false,
     epoch: storage.getItem(keys.epoch),
     offset: 0,
+    log: readLog(),
     snapshotReceived: false,
     incidents: [],
     received: readReceived(),
     error: null,
   };
 
-  let socket: WebSocket | undefined;
-  let stopped = true;
-  let attempt = 0;
-  let pingTimer: ReturnType<typeof setInterval> | undefined;
-  let pongTimer: ReturnType<typeof setTimeout> | undefined;
-  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  // The shared helper reconnects and pings (ADR 0005 timings); online also needs this socket's welcome.
+  let socket: ReconnectingSocket | undefined;
+  let connected = false;
+  let welcomed = false;
   // Joins waiting for a reply, matched by incidentId.
   const pendingJoins = new Map<string, ((result: JoinResult) => void)[]>();
 
@@ -77,6 +79,11 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   function update(changes: Partial<SyncState>): void {
     state = { ...state, ...changes };
     for (const listener of listeners) listener();
+  }
+
+  function readLog(): LoggedEvent[] {
+    const stored = storage.getItem(keys.events);
+    return stored === null ? [] : (JSON.parse(stored) as LoggedEvent[]);
   }
 
   function readReceived(): Event[] {
@@ -104,11 +111,11 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     storage.removeItem(keys.events);
     storage.removeItem(keys.received);
     storage.removeItem(keys.epoch);
-    update({ received: [], incidents: [] });
+    update({ log: [], received: [], incidents: [], error: null });
   }
 
   function send(message: DeviceMessage): void {
-    socket?.send(JSON.stringify(message));
+    socket?.send(message);
   }
 
   function handle(message: CoordinatorMessage): void {
@@ -116,11 +123,13 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       case "welcome":
         if (state.epoch !== null && state.epoch !== message.epoch) clearStored();
         storage.setItem(keys.epoch, message.epoch);
-        attempt = 0;
-        awaitPong();
-        clearInterval(pingTimer);
-        pingTimer = setInterval(() => send({ type: "ping" }), pingIntervalMs);
-        update({ online: true, epoch: message.epoch, offset: message.offset, error: null });
+        welcomed = true;
+        update({ online: connected, epoch: message.epoch, offset: message.offset });
+        push(state.log.filter((e) => e.seq > message.offset));
+        return;
+      // A sync error stays through reconnects, since the bad event is pushed again, until an ack shows sync works.
+      case "ack":
+        update({ offset: Math.max(state.offset, message.upTo), error: null });
         return;
       case "snapshot":
         update({ incidents: message.incidents, received: storeReceived(message.events), snapshotReceived: true });
@@ -133,7 +142,6 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         settleJoins(message.incidentId, { ok: false, reason: message.reason });
         return;
       case "pong":
-        awaitPong();
         return;
       case "error":
         update({ error: message.reason });
@@ -141,55 +149,45 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     }
   }
 
-  // Online needs a pong under 10 s old (ADR 0005), so the timer restarts on welcome and on every pong.
-  function awaitPong(): void {
-    clearTimeout(pongTimer);
-    pongTimer = setTimeout(dropSocket, pongTimeoutMs);
+  // Only after this socket's welcome, which says what is stored; a later welcome resends the rest.
+  function push(items: LoggedEvent[]): void {
+    if (welcomed && items.length > 0) send({ type: "push", items });
   }
 
-  // Goes offline at once, without waiting for a close handshake that may never finish.
-  function dropSocket(): void {
-    const current = socket;
-    if (current === undefined) return;
-    current.onclose = null;
-    current.onmessage = null;
-    current.close();
-    disconnected();
-  }
-
-  function disconnected(): void {
-    clearInterval(pingTimer);
-    clearTimeout(pongTimer);
-    socket = undefined;
+  // The helper reports connected while the last pong is under 10 s old.
+  function setConnected(value: boolean): void {
+    connected = value;
+    if (value) return update({ online: welcomed });
     // A Join without a reply may still have been committed; the snapshot after reconnect shows it if so.
     for (const incidentId of [...pendingJoins.keys()]) settleJoins(incidentId, { ok: false, reason: "offline" });
     update({ online: false, snapshotReceived: false });
-    if (stopped) return;
-    const delay = backoffMs[Math.min(attempt, backoffMs.length - 1)];
-    attempt += 1;
-    reconnectTimer = setTimeout(connect, delay);
-  }
-
-  function connect(): void {
-    const current = options.createSocket(options.url);
-    socket = current;
-    current.onopen = () => send({ type: "hello", deviceId, resourceId, epoch: state.epoch });
-    current.onmessage = (e) => handle(JSON.parse(String(e.data)) as CoordinatorMessage);
-    current.onclose = () => {
-      if (socket === current) disconnected();
-    };
   }
 
   return {
     start() {
-      if (!stopped) return;
-      stopped = false;
-      connect();
+      if (socket) return;
+      socket = openReconnecting({
+        url: options.url,
+        createSocket: options.createSocket,
+        onOpen() {
+          welcomed = false;
+          send({ type: "hello", deviceId, resourceId, epoch: state.epoch });
+        },
+        onMessage: (message) => handle(message as CoordinatorMessage),
+        onConnectedChange: setConnected,
+      });
     },
     stop() {
-      stopped = true;
-      clearTimeout(reconnectTimer);
-      dropSocket();
+      socket?.close();
+      socket = undefined;
+    },
+    record(event) {
+      // Never at or below the Offset, which the Coordinator would skip as already stored.
+      const logged: LoggedEvent = { seq: Math.max(state.log.at(-1)?.seq ?? 0, state.offset) + 1, event };
+      const log = [...state.log, logged];
+      storage.setItem(keys.events, JSON.stringify(log));
+      update({ log });
+      push([logged]);
     },
     join(incidentId) {
       if (!state.online) return Promise.resolve({ ok: false, reason: "offline" });

@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { Event, Triage } from "../shared/event.ts";
 import type { Incident, TransferLeg } from "../shared/incident.ts";
+import { parseEvent } from "../shared/parseEvent.ts";
 import { applyEvent, emptyPatient, type PatientState } from "../shared/patient.ts";
+import type { LoggedEvent } from "../shared/protocol.ts";
 import type { Resource } from "../shared/resource.ts";
 import { uuidv7 } from "../shared/uuidv7.ts";
 import type { DeviceStatus, StoredEvent } from "../shared/watch.ts";
@@ -247,4 +249,90 @@ export function joinIncident(
     );
     return { incident: readIncident(db, incidentId), events: eventsOf(db, incidentId) };
   });
+}
+
+// A LoggedEvent as it arrives, before parseEvent has checked the event.
+export type PushItem = Omit<LoggedEvent, "event"> & { event: unknown };
+
+// A stored push batch: the Device's new Offset, the events it stored and each Incident they touched.
+export type StoredPush = { offset: number; events: StoredEvent[]; incidents: Incident[] };
+
+// A bad event is a bug: nothing of the batch is stored and the Offset stays (ADR 0005).
+export type RejectedPush = { seq: number; reason: string };
+
+class BadEvent extends Error {
+  readonly seq: number;
+  readonly reason: string;
+
+  constructor(seq: number, reason: string) {
+    super(reason);
+    this.seq = seq;
+    this.reason = reason;
+  }
+}
+
+// Checks one Device event against the hello and the tables; throws BadEvent for the first rule it breaks.
+function checkDeviceEvent(db: DatabaseSync, device: Omit<StoredDevice, "offset">, { seq, event: input }: PushItem): Event {
+  const event = parseEvent(input);
+  if ("error" in event) throw new BadEvent(seq, event.error);
+  const { source } = event;
+  if (source.type !== "device") throw new BadEvent(seq, "a Device can only push device events");
+  if (source.deviceId !== device.deviceId) throw new BadEvent(seq, `deviceId ${source.deviceId} differs from the hello`);
+  if (source.resourceId !== device.resourceId) throw new BadEvent(seq, `resourceId ${source.resourceId} differs from the hello`);
+  const patient = db.prepare("SELECT patientId FROM patients WHERE incidentId = ?").get(event.incidentId) as
+    | { patientId: string }
+    | undefined;
+  if (patient === undefined) throw new BadEvent(seq, `unknown Incident ${event.incidentId}`);
+  const leg = db
+    .prepare("SELECT 1 FROM transfer_legs WHERE legId = ? AND incidentId = ? AND resourceId = ?")
+    .get(source.legId, event.incidentId, device.resourceId);
+  if (leg === undefined) throw new BadEvent(seq, `legId ${source.legId} is not this Resource's leg in ${event.incidentId}`);
+  if (event.patientId !== patient.patientId) throw new BadEvent(seq, `patientId ${event.patientId} is not ${event.incidentId}'s`);
+  if (db.prepare("SELECT 1 FROM events WHERE eventId = ?").get(event.eventId) !== undefined) {
+    throw new BadEvent(seq, `eventId ${event.eventId} is already stored`);
+  }
+  return event;
+}
+
+// One push batch is one transaction: insert each event, apply it to the Patient, bump the Offset (ADR 0006).
+// seq <= Offset is skipped; a gap after the Offset is a bug.
+export function storePush(db: DatabaseSync, device: Omit<StoredDevice, "offset">, items: PushItem[]): StoredPush | RejectedPush {
+  try {
+    return transaction(db, () => {
+      let { offset } = db.prepare('SELECT "offset" FROM devices WHERE deviceId = ?').get(device.deviceId) as { offset: number };
+      const insert = db.prepare(
+        "INSERT INTO events (eventId, incidentId, kind, enteredAt, deviceId, seq, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      );
+      const readPatient = db.prepare("SELECT state FROM patients WHERE incidentId = ?");
+      const writePatient = db.prepare("UPDATE patients SET state = ? WHERE incidentId = ?");
+      const events: StoredEvent[] = [];
+      const touched = new Set<string>();
+
+      for (const item of items) {
+        if (item.seq <= offset) continue;
+        if (item.seq > offset + 1) throw new BadEvent(item.seq, `seq ${item.seq} leaves a gap after Offset ${offset}`);
+        const event = checkDeviceEvent(db, device, item);
+        const { lastInsertRowid } = insert.run(
+          event.eventId,
+          event.incidentId,
+          event.kind,
+          event.enteredAt,
+          device.deviceId,
+          item.seq,
+          JSON.stringify(event),
+        );
+        const { state } = readPatient.get(event.incidentId) as { state: string };
+        writePatient.run(JSON.stringify(applyEvent(JSON.parse(state) as PatientState, event)), event.incidentId);
+        events.push({ rowid: Number(lastInsertRowid), deviceId: device.deviceId, seq: item.seq, event });
+        touched.add(event.incidentId);
+        offset = item.seq;
+      }
+
+      db.prepare('UPDATE devices SET "offset" = ? WHERE deviceId = ?').run(offset, device.deviceId);
+      return { offset, events, incidents: [...touched].map((incidentId) => readIncident(db, incidentId)) };
+    });
+  } catch (error) {
+    if (error instanceof BadEvent) return { seq: error.seq, reason: error.reason };
+    throw error;
+  }
 }

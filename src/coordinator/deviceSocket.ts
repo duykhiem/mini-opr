@@ -5,15 +5,15 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { Event } from "../shared/event.ts";
 import type { Incident } from "../shared/incident.ts";
 import type { CoordinatorMessage, DeviceMessage } from "../shared/protocol.ts";
-import { joinIncident, readEpoch, registerDevice, resourceExists, snapshotFor } from "./db.ts";
+import { joinIncident, readEpoch, registerDevice, resourceExists, snapshotFor, storePush, type PushItem, type StoredPush } from "./db.ts";
 
 function send(socket: WebSocket, message: CoordinatorMessage): void {
   socket.send(JSON.stringify(message));
 }
 
 // Bad messages are bugs: error, then close (ADR 0005).
-function reject(socket: WebSocket, reason: string): void {
-  send(socket, { type: "error", seq: null, reason });
+function reject(socket: WebSocket, reason: string, seq: number | null = null): void {
+  send(socket, { type: "error", seq, reason });
   socket.close();
 }
 
@@ -21,8 +21,17 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value !== "";
 }
 
+function isPushItem(value: unknown): value is PushItem {
+  if (typeof value !== "object" || value === null) return false;
+  const { seq } = value as Record<string, unknown>;
+  return typeof seq === "number" && Number.isInteger(seq) && seq >= 1;
+}
+
+// A push's events are checked when it is stored, so each reason can carry its seq.
+type ParsedMessage = Exclude<DeviceMessage, { type: "push" }> | { type: "push"; items: PushItem[] };
+
 // Returns the message if it has the schema of a DeviceMessage, otherwise a reason it does not.
-function parse(data: unknown): DeviceMessage | string {
+function parse(data: unknown): ParsedMessage | string {
   let message: unknown;
   try {
     message = JSON.parse(String(data));
@@ -39,6 +48,9 @@ function parse(data: unknown): DeviceMessage | string {
     case "join":
       if (!isNonEmptyString(m.incidentId)) return "join needs incidentId";
       return { type: "join", incidentId: m.incidentId };
+    case "push":
+      if (!Array.isArray(m.items) || !m.items.every(isPushItem)) return "push needs items, each with a seq of 1 or more";
+      return { type: "push", items: m.items };
     case "ping":
       return { type: "ping" };
     default:
@@ -61,10 +73,15 @@ export type DeviceChannel = {
 const pingTimeoutMs = 10_000;
 
 // onConnectedChange runs on hello, on close and when a socket's last ping gets older than 10 s,
-// and onJoin after a Join commits, so the Coordinator can tell the /watch pages (ADR 0008).
+// onJoin after a Join commits and onPush after a push batch commits, so the Coordinator can tell
+// the /watch pages (ADR 0008).
 export function createDeviceChannel(
   db: DatabaseSync,
-  options: { onConnectedChange(deviceId: string): void; onJoin(incident: Incident): void },
+  options: {
+    onConnectedChange(deviceId: string): void;
+    onJoin(incident: Incident): void;
+    onPush(deviceId: string, stored: StoredPush): void;
+  },
 ): DeviceChannel {
   const wss = new WebSocketServer({ noServer: true });
   // Socket errors end in a close; without listeners ws would throw them.
@@ -145,6 +162,20 @@ export function createDeviceChannel(
           // The joining socket is among them, as its Resource now has a leg.
           sendIncident(joined.incident, joined.events);
           options.onJoin(joined.incident);
+          return;
+        }
+        case "push": {
+          let stored: ReturnType<typeof storePush>;
+          try {
+            stored = storePush(db, { deviceId, resourceId: resources.get(socket)! }, message.items);
+          } catch (error) {
+            // The transaction has rolled back; fail loudly on this socket instead of on the process.
+            console.error(error);
+            return reject(socket, "could not store the push");
+          }
+          if ("reason" in stored) return reject(socket, stored.reason, stored.seq);
+          send(socket, { type: "ack", upTo: stored.offset });
+          if (stored.events.length > 0) options.onPush(deviceId, stored);
           return;
         }
         case "hello":

@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { startCoordinator, type Coordinator } from "../coordinator/coordinator.ts";
+import { draftEvent } from "../shared/draftEvent.ts";
+import type { Event } from "../shared/event.ts";
 import type { Incident } from "../shared/incident.ts";
 import { deviceSocketPath } from "../shared/protocol.ts";
+import type { WatchSnapshot } from "../shared/watch.ts";
 import { createSyncClient, type KeyValueStore, type SyncClient, type SyncState } from "./syncClient.ts";
 import { memoryStorage } from "./memoryStorage.ts";
 
@@ -340,3 +343,75 @@ describe("Join", () => {
     expect(await result).toEqual({ ok: false, reason: "offline" });
   });
 });
+
+// A note by device-1 on alpha-1 under its latest Transfer leg in the Incident.
+function note(incident: Incident, text: string, legId = incident.legs.findLast((l) => l.resourceId === "alpha-1")!.legId): Event {
+  const result = draftEvent(
+    { kind: "noteAdded", text },
+    incident,
+    { deviceId: "device-1", resourceId: "alpha-1", legId },
+    Date.now,
+  );
+  if ("error" in result) throw new Error(result.error);
+  return result;
+}
+
+describe("Uploading the Event log", () => {
+  it("writes an Event to the Event log with the next seq, pushes it and moves the Offset on ack", async () => {
+    const c = await coordinator();
+    const incident = await postIncident(c, { resourceId: "alpha-1" });
+    const storage = memoryStorage();
+    const device = client(c, { storage });
+    await waitFor(device, (s) => s.online && s.snapshotReceived);
+
+    device.record(note(incident, "Breathing normally"));
+    device.record(note(incident, "Alert"));
+
+    expect(device.getState().log.map((e) => e.seq)).toEqual([1, 2]);
+    expect(JSON.parse(storage.getItem("opr:device-1:events")!)).toHaveLength(2);
+    await waitFor(device, (s) => s.offset === 2);
+    expect(c.listDevices()).toEqual([{ deviceId: "device-1", resourceId: "alpha-1", offset: 2 }]);
+  });
+
+  it("after a reconnect pushes only what is above the Offset, so nothing is stored twice", async () => {
+    const c = await coordinator();
+    const incident = await postIncident(c, { resourceId: "alpha-1" });
+    const device = client(c);
+    await waitFor(device, (s) => s.online);
+    device.record(note(incident, "Breathing normally"));
+    await waitFor(device, (s) => s.offset === 1);
+
+    c.closeDeviceSockets();
+    await waitFor(device, (s) => !s.online);
+    device.record(note(incident, "Alert"));
+    expect(device.getState().offset).toBe(1);
+
+    await waitFor(device, (s) => s.online && s.offset === 2);
+    expect((await watchSnapshot(c)).events.map((e) => [e.deviceId, e.seq])).toEqual([
+      ["device-1", 1],
+      ["device-1", 2],
+    ]);
+  });
+
+  it("shows a sync error for a bad event and keeps reconnecting", async () => {
+    const c = await coordinator();
+    const incident = await postIncident(c, { resourceId: "alpha-1" });
+    const device = client(c);
+    await waitFor(device, (s) => s.online);
+
+    device.record(note(incident, "Wrong leg", "not-a-leg"));
+
+    await waitFor(device, (s) => s.error !== null);
+    await waitFor(device, (s) => !s.online);
+    const state = await waitFor(device, (s) => s.online);
+    expect(state.error).toMatch(/legId not-a-leg/);
+    expect(state.offset).toBe(0);
+  });
+});
+
+async function watchSnapshot(c: Coordinator): Promise<WatchSnapshot> {
+  const socket = new WebSocket(`ws://localhost:${c.port}/watch`);
+  const message = await new Promise<WatchSnapshot>((resolve) => (socket.onmessage = (e) => resolve(JSON.parse(String(e.data)))));
+  socket.close();
+  return message;
+}

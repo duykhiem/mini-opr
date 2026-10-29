@@ -54,12 +54,19 @@ export async function startCoordinator(options: { dbPath: string; port: number }
 
   // After a Reset the closing Devices have no row left, so their close is not reported.
   // ADR 0008: after a Join, the whole Incident with its new leg.
+  const broadcastDevice = (deviceId: string) => {
+    const device = readDevice(db, deviceId);
+    if (device) watch.broadcast({ type: "device", ...statusOf(device) });
+  };
   const devices = createDeviceChannel(db, {
-    onConnectedChange: (deviceId) => {
-      const device = readDevice(db, deviceId);
-      if (device) watch.broadcast({ type: "device", ...statusOf(device) });
-    },
+    onConnectedChange: broadcastDevice,
     onJoin: (incident) => watch.broadcast({ type: "incident", incident }),
+    // ADR 0008: the new events, then the Device's new Offset, then each Incident the batch touched.
+    onPush: (deviceId, { events, incidents }) => {
+      watch.broadcast({ type: "events", events });
+      broadcastDevice(deviceId);
+      for (const incident of incidents) watch.broadcast({ type: "incident", incident });
+    },
   });
 
   const server = createServer((req, res) => {

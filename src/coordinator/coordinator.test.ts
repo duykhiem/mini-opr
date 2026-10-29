@@ -1,9 +1,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import fc from "fast-check";
 import { afterEach, describe, expect, it } from "vitest";
+import type { EventBody } from "../shared/draftEvent.ts";
+import { triages, type Event } from "../shared/event.ts";
 import type { Incident } from "../shared/incident.ts";
-import { deviceSocketPath } from "../shared/protocol.ts";
+import { applyEvent, emptyPatient } from "../shared/patient.ts";
+import { deviceSocketPath, type CoordinatorMessage } from "../shared/protocol.ts";
+import { uuidv7 } from "../shared/uuidv7.ts";
 import type { WatchMessage } from "../shared/watch.ts";
 import { startCoordinator, type Coordinator } from "./coordinator.ts";
 
@@ -336,5 +341,191 @@ describe("Reset", () => {
     expect(((await resources.json()) as { resourceId: string }[]).map((r) => r.resourceId)).toEqual(["alpha-1", "bravo-2", "charlie-3"]);
     const created = await postIncident(coordinator, { resourceId: "charlie-3" });
     expect(((await created.json()) as { incident: Incident }).incident.incidentId).toBe("INC-0001");
+  });
+});
+
+type DeviceIdentity = { deviceId: string; resourceId: string };
+
+const alpha: DeviceIdentity = { deviceId: "device-1", resourceId: "alpha-1" };
+
+async function createIncidentFor(coordinator: Coordinator, resourceId: string): Promise<Incident> {
+  const created = await postIncident(coordinator, { resourceId });
+  return ((await created.json()) as { incident: Incident }).incident;
+}
+
+// An Event by the Device under the Resource's latest Transfer leg in the Incident.
+function eventBy(device: DeviceIdentity, incident: Incident, body: EventBody): Event {
+  const leg = incident.legs.findLast((l) => l.resourceId === device.resourceId)!;
+  const enteredAt = Date.now();
+  return {
+    ...body,
+    eventId: uuidv7(enteredAt),
+    enteredAt,
+    incidentId: incident.incidentId,
+    patientId: incident.patientId,
+    source: { type: "device", ...device, legId: leg.legId },
+  };
+}
+
+const noteBy = (device: DeviceIdentity, incident: Incident, text: string) => eventBy(device, incident, { kind: "noteAdded", text });
+
+// A raw Device socket past its welcome and snapshot: hands out later replies in arrival order.
+async function connectDevice(coordinator: Coordinator, device: DeviceIdentity) {
+  const socket = openDeviceSocket(coordinator, device);
+  const received: CoordinatorMessage[] = [];
+  let notify = () => {};
+  socket.addEventListener("message", (e) => {
+    received.push(JSON.parse(String(e.data)) as CoordinatorMessage);
+    notify();
+  });
+  const closed = new Promise<void>((resolve) => socket.addEventListener("close", () => resolve()));
+  async function next(): Promise<CoordinatorMessage> {
+    while (received.length === 0) await new Promise<void>((resolve) => (notify = resolve));
+    return received.shift()!;
+  }
+  expect(await next()).toMatchObject({ type: "welcome" });
+  expect(await next()).toMatchObject({ type: "snapshot" });
+  return {
+    next,
+    closed,
+    push: (items: { seq: number; event: unknown }[]) => socket.send(JSON.stringify({ type: "push", items })),
+  };
+}
+
+describe("Push", () => {
+  it("stores a batch, moves the Offset and acks up to its last seq", async () => {
+    const coordinator = await start(":memory:");
+    const incident = await createIncidentFor(coordinator, "alpha-1");
+    const device = await connectDevice(coordinator, alpha);
+
+    device.push([
+      { seq: 1, event: noteBy(alpha, incident, "Breathing normally") },
+      { seq: 2, event: noteBy(alpha, incident, "Alert") },
+    ]);
+
+    expect(await device.next()).toEqual({ type: "ack", upTo: 2 });
+    expect(coordinator.listDevices()).toEqual([{ ...alpha, offset: 2 }]);
+  });
+
+  it("skips seq at or below the Offset, so a resent batch stores no duplicates", async () => {
+    const coordinator = await start(":memory:");
+    const incident = await createIncidentFor(coordinator, "alpha-1");
+    const device = await connectDevice(coordinator, alpha);
+    const first = { seq: 1, event: noteBy(alpha, incident, "Breathing normally") };
+    device.push([first]);
+    expect(await device.next()).toEqual({ type: "ack", upTo: 1 });
+
+    device.push([first, { seq: 2, event: noteBy(alpha, incident, "Alert") }]);
+
+    expect(await device.next()).toEqual({ type: "ack", upTo: 2 });
+    const snapshot = (await openWatchSocket(coordinator).next()) as Extract<WatchMessage, { type: "snapshot" }>;
+    expect(snapshot.events.map((e) => e.seq)).toEqual([1, 2]);
+  });
+
+  it("sends events, then the Device with its new Offset, then the touched Incident on /watch", async () => {
+    const coordinator = await start(":memory:");
+    const incident = await createIncidentFor(coordinator, "alpha-1");
+    const device = await connectDevice(coordinator, alpha);
+    const watch = openWatchSocket(coordinator);
+    await watch.next();
+    const name = eventBy(alpha, incident, { kind: "fieldSet", field: "name", value: "Kari Nordmann" });
+
+    device.push([{ seq: 1, event: name }]);
+
+    expect(await watch.next()).toEqual({ type: "events", events: [{ rowid: expect.any(Number), deviceId: "device-1", seq: 1, event: name }] });
+    expect(await watch.next()).toEqual({ type: "device", ...alpha, offset: 1, connected: true });
+    const touched = await watch.next();
+    expect(touched).toMatchObject({ type: "incident", incident: { incidentId: incident.incidentId, patient: { name: { value: "Kari Nordmann" } } } });
+  });
+
+  type Context = { incident: Incident; other: Incident; first: Event };
+
+  // Each bad event goes at seq 3, after a good one at seq 2 in the same batch; the reason names the rule.
+  it.each<[string, (c: Context) => { seq?: number; event: unknown }, RegExp]>([
+    ["a wrong schema", (c) => ({ event: { ...noteBy(alpha, c.incident, "x"), text: "  " } }), /text must be/],
+    ["an EOC source", (c) => ({ event: { ...noteBy(alpha, c.incident, "x"), source: { type: "eoc" } } }), /device events/],
+    ["an unknown Incident", (c) => ({ event: { ...noteBy(alpha, c.incident, "x"), incidentId: "INC-9999" } }), /unknown Incident/],
+    ["a deviceId that differs from the hello", (c) => ({ event: withSource(noteBy(alpha, c.incident, "x"), { deviceId: "device-9" }) }), /deviceId/],
+    ["a resourceId that differs from the hello", (c) => ({ event: withSource(noteBy(alpha, c.incident, "x"), { resourceId: "bravo-2" }) }), /resourceId/],
+    ["a legId that is not this Resource's", (c) => ({ event: withSource(noteBy(alpha, c.incident, "x"), { legId: c.other.legs[0]!.legId }) }), /legId/],
+    ["a patientId that is not its Incident's", (c) => ({ event: { ...noteBy(alpha, c.incident, "x"), patientId: c.other.patientId } }), /patientId/],
+    ["an eventId already stored, with a new seq", (c) => ({ event: { ...noteBy(alpha, c.incident, "x"), eventId: c.first.eventId } }), /already stored/],
+    ["a seq that leaves a gap after the Offset", (c) => ({ seq: 4, event: noteBy(alpha, c.incident, "x") }), /gap/],
+  ])("answers %s with error, then close, and stores nothing of the batch", async (_, bad, reason) => {
+    const coordinator = await start(":memory:");
+    const incident = await createIncidentFor(coordinator, "alpha-1");
+    const other = await createIncidentFor(coordinator, "bravo-2");
+    const device = await connectDevice(coordinator, alpha);
+    const first = noteBy(alpha, incident, "Breathing normally");
+    device.push([{ seq: 1, event: first }]);
+    expect(await device.next()).toEqual({ type: "ack", upTo: 1 });
+
+    const { seq = 3, event } = bad({ incident, other, first });
+    device.push([{ seq: 2, event: noteBy(alpha, incident, "Alert") }, { seq, event }]);
+
+    expect(await device.next()).toEqual({ type: "error", seq, reason: expect.stringMatching(reason) });
+    await device.closed;
+    expect(coordinator.listDevices()).toEqual([{ ...alpha, offset: 1 }]);
+    const snapshot = (await openWatchSocket(coordinator).next()) as Extract<WatchMessage, { type: "snapshot" }>;
+    expect(snapshot.events.map((e) => e.event.eventId)).toEqual([first.eventId]);
+  });
+});
+
+function withSource(event: Event, changes: Partial<{ deviceId: string; resourceId: string; legId: string }>): Event {
+  return { ...event, source: { ...(event.source as Extract<Event["source"], { type: "device" }>), ...changes } };
+}
+
+describe("The Patient projection", () => {
+  const body: fc.Arbitrary<EventBody> = fc.oneof(
+    fc.record({ kind: fc.constant("fieldSet"), field: fc.constant("name"), value: fc.constantFrom("Kari", "Kari Nordmann", "Ola") }),
+    fc.record({ kind: fc.constant("fieldSet"), field: fc.constant("dob"), value: fc.constantFrom("1970-01-31", "1985-06-15") }),
+    fc.record({ kind: fc.constant("fieldSet"), field: fc.constant("triage"), value: fc.constantFrom(...triages) }),
+    fc.record({ kind: fc.constant("vitalAdded"), vitals: fc.record({ pulse: fc.integer({ min: 30, max: 200 }) }) }),
+    fc.record({ kind: fc.constant("noteAdded"), text: fc.constantFrom("Alert", "Breathing normally") }),
+  ) as fc.Arbitrary<EventBody>;
+
+  // Few distinct enteredAt values, so ties on enteredAt are common and the eventId decides.
+  // `order` gives the replay order of the stored events.
+  const stamped = fc.uniqueArray(
+    fc.record({ body, enteredAt: fc.integer({ min: 1000, max: 1003 }), tag: fc.stringMatching(/^[0-9a-f]{6}$/), order: fc.nat() }),
+    {
+      minLength: 1,
+      maxLength: 12,
+      selector: (e) => e.tag,
+    },
+  );
+
+  it("equals clearing it and replaying the stored events in any order", async () => {
+    const coordinator = await start(":memory:");
+    let run = 0;
+
+    await fc.assert(
+      fc.asyncProperty(
+        stamped,
+        async (items) => {
+          // Every run, shrinking included, uses its own Device and eventIds on the one Coordinator.
+          const device = { deviceId: `device-${++run}`, resourceId: "alpha-1" };
+          const eventId = (tag: string) => `e-${run}-${tag}`;
+          const incident = await createIncidentFor(coordinator, "alpha-1");
+          const toEvent = ({ body, enteredAt, tag }: (typeof items)[number]): Event => ({ ...eventBy(device, incident, body), eventId: eventId(tag), enteredAt });
+          const order = new Map(items.map((item) => [eventId(item.tag), item.order]));
+          const connected = await connectDevice(coordinator, device);
+
+          connected.push(items.map((item, i) => ({ seq: i + 1, event: toEvent(item) })));
+          expect(await connected.next()).toEqual({ type: "ack", upTo: items.length });
+
+          const snapshot = (await openWatchSocket(coordinator).next()) as Extract<WatchMessage, { type: "snapshot" }>;
+          const stored = snapshot.incidents.find((i) => i.incidentId === incident.incidentId)!;
+          // Clear the Patient and replay the stored events in another order.
+          const replayed = snapshot.events
+            .filter((e) => e.event.incidentId === incident.incidentId)
+            .map((e) => e.event)
+            .sort((a, b) => order.get(a.eventId)! - order.get(b.eventId)!)
+            .reduce(applyEvent, emptyPatient);
+          expect(stored.patient).toEqual(replayed);
+        },
+      ),
+      { numRuns: 30 },
+    );
   });
 });

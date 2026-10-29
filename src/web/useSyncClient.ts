@@ -19,17 +19,23 @@ function socketUrl(): string {
 }
 
 // Runs the Device sync client while this tab is the Device of the Resource.
-export function useSyncClient(resourceId: string): { state: SyncState; join: SyncClient["join"] } {
+export function useSyncClient(resourceId: string): {
+  deviceId: string;
+  state: SyncState;
+  join: SyncClient["join"];
+  record: SyncClient["record"];
+} {
+  const deviceId = useMemo(() => deviceIdFor(resourceId), [resourceId]);
   const client = useMemo(
     () =>
       createSyncClient({
         url: socketUrl(),
-        deviceId: deviceIdFor(resourceId),
+        deviceId,
         resourceId,
         storage: localStorage,
         createSocket: (url) => new WebSocket(url),
       }),
-    [resourceId],
+    [deviceId, resourceId],
   );
 
   useEffect(() => {
@@ -37,5 +43,5 @@ export function useSyncClient(resourceId: string): { state: SyncState; join: Syn
     return () => client.stop();
   }, [client]);
 
-  return { state: useSyncExternalStore(client.subscribe, client.getState), join: client.join };
+  return { deviceId, state: useSyncExternalStore(client.subscribe, client.getState), join: client.join, record: client.record };
 }

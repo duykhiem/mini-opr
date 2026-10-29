@@ -13,6 +13,7 @@ export type ReconnectingSocket = { send(message: unknown): void; close(): void }
 
 export function openReconnecting(options: {
   url: string;
+  createSocket?: (url: string) => WebSocket; // the Device sync client takes its WebSocket from the caller (ADR 0007)
   onOpen?: () => void; // runs before the first ping, so a Device can send hello first
   onMessage: (message: unknown) => void; // every parsed message except pong
   onConnectedChange: (connected: boolean) => void; // connected while the last pong is under 10 s old
@@ -41,15 +42,20 @@ export function openReconnecting(options: {
     pongTimer = setTimeout(() => lost(ws), pongTimeoutMs);
   }
 
+  // A socket counts as healthy from its second pong, 5 s in; a Device whose push is refused right
+  // after its first pong is closed again, and must keep backing off.
+  let pongs = 0;
+
   function onPong(ws: WebSocket): void {
-    attempt = 0;
+    if (++pongs > 1) attempt = 0;
     setConnected(true);
     expectPong(ws);
   }
 
   function connect(): void {
-    const ws = new WebSocket(options.url);
+    const ws = options.createSocket?.(options.url) ?? new WebSocket(options.url);
     socket = ws;
+    pongs = 0;
     ws.onopen = () => {
       options.onOpen?.();
       send({ type: "ping" });

@@ -4,9 +4,14 @@ import type { Incident } from "./incident.ts";
 
 export const deviceSocketPath = "/sync";
 
+// One Event of a Device's Event log, numbered by seq.
+export type LoggedEvent = { seq: number; event: Event };
+
 export type DeviceMessage =
   | { type: "hello"; deviceId: string; resourceId: string; epoch: string | null }
   | { type: "join"; incidentId: string } // identity comes from the hello
+  // Every seq above the Offset after welcome, then each new event at once.
+  | { type: "push"; items: LoggedEvent[] }
   | { type: "ping" };
 
 // A Join of an Incident id the Coordinator does not know; a user error, so the socket stays open.
@@ -14,6 +19,7 @@ export type JoinRejectReason = "unknown";
 
 export type CoordinatorMessage =
   | { type: "welcome"; epoch: string; offset: number }
+  | { type: "ack"; upTo: number } // after the push batch is committed
   | { type: "snapshot"; incidents: Incident[]; events: Event[] }
   // Legs changed: the whole Incident and its full event history.
   | { type: "incident"; incident: Incident; events: Event[] }
