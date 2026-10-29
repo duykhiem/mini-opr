@@ -1,6 +1,6 @@
 # Mini OPR
 
-Mini OPR is a demo of how one patient record travels with a Patient across several ambulance Transfer legs. Each leg is handled by a different Resource on its own Device, and every Device's Event log is gathered by one Coordinator.
+Mini OPR is a demo of how one patient record travels with a Patient across several ambulance Transfer legs. Each leg is handled by one Resource on its own Device, and every Device's Event log is gathered by one Coordinator.
 
 It is a demo of how a One Patient Record (OPR) should behave. It is not a product. It uses no existing product code, no real data and no real integrations.
 
@@ -10,8 +10,8 @@ It is a demo of how a One Patient Record (OPR) should behave. It is not a produc
 
 The demo is manual: open the EOC page, three Device tabs and the Coordinator page.
 
-- **EOC page.** Creates Incidents. Each Incident has one Patient and an ordered list of Transfer legs, all created up front (leg n goes to Resource n). The EOC is not a Device and has no Event log. When it creates an Incident, it may give the Patient's name, date of birth and triage.
-- **Device page.** One browser tab. It picks one of three seeded Resources, from a dropdown or the `?resource=` URL param. There is no auth. It lists the Transfer legs of its Resource.
+- **EOC page.** Creates Incidents. Each Incident has one Patient and its Transfer legs. The EOC creates only the first leg, for one Resource, and changes nothing after that. The EOC is not a Device and has no Event log. When it creates an Incident, it may give the Patient's name, date of birth and triage.
+- **Device page.** One browser tab. It picks one of three seeded Resources, from a dropdown or the `?resource=` URL param. There is no auth. It lists the Transfer legs of its Resource, and can Join an Incident by pasting its Incident id.
 - **Coordinator page.** Shows the merged log and each Device's offset.
 
 A Reset exists.
@@ -20,8 +20,10 @@ A Reset exists.
 
 - Online only. There is no manual offline switch and no scenario button.
 - Many Incidents can run at once.
-- Leg n+1 becomes the Active leg when Resource n completes leg n.
-- A Device first sees an Incident when its leg becomes active, then gets that Incident's new events in realtime.
+- A Transfer leg is Active until a Device of its Resource completes it with a `legCompleted` event, then Completed for good. Several legs of one Incident can be Active at once.
+- Any Resource can Join an Incident by its id, which opens a new Transfer leg for that Resource. Joining needs the network. There is no accept step.
+- An Incident is Closed while it has no Active leg; a Join reopens it. While it is Closed, Devices lock the Patient form, but the Coordinator still stores every event.
+- A Device first sees an Incident when the EOC assigns it the first leg or when it joins, then gets that Incident's new events in realtime.
 - After Handover, the previous Resource can still see and edit the Patient.
 - A Device saves every change on itself first, then sends it to the Coordinator in the background. It shows an online / offline indicator, with no pending count.
 - The Coordinator keeps every change from every Device. The Patient is rebuilt from those changes.
@@ -37,7 +39,6 @@ There are no conflict marks and no settle entries.
 
 Open tickets on the map:
 
-- [Transfer leg lifecycle and Handover rules](https://github.com/duykhiem/mini-opr/issues/5)
 - [Coordinator tables and event application](https://github.com/duykhiem/mini-opr/issues/8)
 - [Screen layout for EOC, Device and Coordinator pages](https://github.com/duykhiem/mini-opr/issues/9)
 - [Channels for the EOC and Coordinator pages](https://github.com/duykhiem/mini-opr/issues/10)
