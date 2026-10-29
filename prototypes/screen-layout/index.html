@@ -1,0 +1,448 @@
+<!doctype html>
+<!--
+  PROTOTYPE, throwaway. Not production code.
+  Question: "Screen layout for EOC, Device and Coordinator pages" (duykhiem/mini-opr #9).
+  Plan: three radically different layouts (A, B, C) of all three pages, switchable via ?variant=,
+  page via ?page=eoc|device|coordinator, Device Resource via ?resource=R1|R2|R3.
+  State is in memory and fake: no Coordinator, no WebSocket, no storage. Reload resets it.
+  Run: double-click this file.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini OPR layout prototype</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --ink: #1d2330; --muted: #6b7385; --line: #dfe3ea;
+    --accent: #2f5bd3; --ok: #2e8b57; --warn: #b7791f; --bad: #c0392b;
+    --red: #d73a3a; --orange: #f08c2e; --yellow: #e5c02a; --green: #3aa55d; --blue: #3b7ddd;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+  button, input, select, textarea { font: inherit; }
+  button { cursor: pointer; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 6px 10px; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input, select, textarea { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: #fff; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; }
+  h2 { font-size: 16px; margin: 0 0 10px; } h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .muted { color: var(--muted); } .small { font-size: 12px; } .mono { font-family: ui-monospace, monospace; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); background: #fff; }
+  .chip.active { background: #e7f3ec; border-color: #b9dcc7; color: var(--ok); }
+  .chip.closed { background: #eee; color: var(--muted); }
+  .chip.pending { background: #fdf3e1; border-color: #f0d49c; color: var(--warn); }
+  .tri { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px; margin-right: 4px; }
+  .banner { padding: 8px 12px; border-radius: 8px; background: #eef1f6; color: var(--muted); margin-bottom: 10px; }
+  .banner.err { background: #fbeaea; color: var(--bad); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  .on { background: var(--ok); } .off { background: var(--bad); }
+  .err-text { color: var(--bad); font-size: 12px; }
+
+  /* prototype chrome: deliberately not part of the design */
+  .proto-top { background: #23262e; color: #cfd3dc; padding: 6px 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+  .proto-top b { color: #fff; }
+  .proto-top button { background: #353a45; color: #e8eaf0; border-color: #4a505e; padding: 3px 9px; }
+  .proto-top button.cur { background: #ffd54a; color: #222; border-color: #ffd54a; }
+  .proto-switch { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: #111; color: #fff; border-radius: 999px; padding: 6px 8px; display: flex; gap: 8px; align-items: center; box-shadow: 0 6px 20px rgba(0,0,0,.35); z-index: 50; }
+  .proto-switch button { background: #333; color: #fff; border: 0; border-radius: 999px; width: 30px; height: 30px; padding: 0; }
+  .proto-state { position: fixed; right: 10px; bottom: 64px; width: min(460px, 92vw); max-height: 55vh; overflow: auto; background: #111; color: #9fe39f; font: 11px/1.35 ui-monospace, monospace; padding: 10px; border-radius: 8px; z-index: 40; white-space: pre; }
+  main { padding: 16px; padding-bottom: 80px; }
+
+  /* Variant A: classic panes */
+  .a-device { display: grid; grid-template-columns: 250px 1fr 330px; gap: 12px; }
+  .a-eoc { display: grid; grid-template-columns: 320px 1fr; gap: 12px; }
+  .a-list button { display: block; width: 100%; text-align: left; margin-bottom: 6px; }
+  .a-list button.sel { border-color: var(--accent); box-shadow: 0 0 0 2px #dbe4fb; }
+  .field { display: grid; grid-template-columns: 110px 1fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+
+  /* Variant B: tablet, one Incident at a time */
+  .b-top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .b-res { font-size: 22px; font-weight: 700; }
+  .b-tabs button { border-radius: 999px; padding: 8px 14px; }
+  .b-tabs button.sel { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .b-name { font-size: 26px; font-weight: 700; }
+  .b-tri { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .b-tri button { height: 56px; color: #fff; font-weight: 700; border: 3px solid transparent; }
+  .b-tri button.sel { border-color: var(--ink); box-shadow: 0 0 0 2px #fff inset; }
+  .b-vit { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .b-vit label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); }
+  .b-vit input { font-size: 20px; padding: 10px; }
+  .b-big { width: 100%; padding: 16px; font-size: 18px; font-weight: 700; }
+  .b-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, 92vw); background: #fff; border-left: 1px solid var(--line); padding: 14px; overflow: auto; z-index: 30; box-shadow: -8px 0 24px rgba(0,0,0,.12); }
+  .b-eoc { max-width: 560px; margin: 0 auto; }
+  .b-incid { font-size: 44px; font-weight: 800; letter-spacing: .04em; text-align: center; }
+  .b-coord { display: grid; grid-template-columns: 220px 1fr; gap: 12px; }
+
+  /* Variant C: feed */
+  .c-wrap { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+  .c-pin { position: sticky; top: 0; z-index: 5; }
+  .c-feed { display: flex; flex-direction: column; gap: 6px; }
+  .c-msg { max-width: 75%; padding: 8px 10px; border-radius: 10px; background: #fff; border: 1px solid var(--line); }
+  .c-msg.mine { align-self: flex-end; background: #eaf0ff; border-color: #cbd8fb; }
+  .c-msg.eoc { align-self: center; background: #f3f0e6; border-color: #e3dcc4; }
+  .c-msg.sys { align-self: center; background: transparent; border: 0; color: var(--muted); font-size: 12px; }
+  .c-seg button { border-radius: 0; margin-left: -1px; } .c-seg button.sel { background: var(--ink); color: #fff; }
+  .c-board { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .c-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+  .c-lanes { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 10px; overflow-x: auto; }
+  .c-lane .ev { border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; margin-bottom: 5px; background: #fff; font-size: 12px; }
+  .c-offset { border-top: 2px dashed var(--accent); color: var(--accent); font-size: 11px; margin: 4px 0 8px; padding-top: 2px; }
+
+  @media (max-width: 860px) {
+    .a-device, .a-eoc, .b-coord, .c-board { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ---------- fake in-memory world ----------
+const RESOURCES = [ { id: "R1", name: "Alpha 1" }, { id: "R2", name: "Bravo 2" }, { id: "R3", name: "Charlie 3" } ];
+const TRIAGE = ["red", "orange", "yellow", "green", "blue"];
+const VITALS = [ ["pulse", "Pulse", "/min"], ["systolic", "BP sys", "mmHg"], ["diastolic", "BP dia", "mmHg"], ["spo2", "SpO2", "%"], ["respRate", "Resp", "/min"], ["temperature", "Temp", "°C"] ];
+let clock = Date.parse("2026-10-29T08:00:00Z");
+const tick = () => (clock += 37000);
+let nextId = 1;
+const uuid = () => "e" + String(nextId++).padStart(4, "0");
+const resName = (rid) => RESOURCES.find((r) => r.id === rid)?.name ?? rid;
+
+let S;
+function seed() {
+  S = {
+    epoch: "ep-" + Math.random().toString(16).slice(2, 6),
+    devices: { R1: { id: "dev-a1f3", online: true, seq: 0 }, R2: { id: "dev-b7c2", online: true, seq: 0 }, R3: { id: "dev-c09e", online: true, seq: 0 } },
+    incidents: [], events: [],
+  };
+  const i1 = createIncident({ name: "Mira Holt", dob: "1961-04-12", triage: "orange", resource: "R1" }, "INC-4821");
+  addEvent("R1", i1, { kind: "vitalAdded", vitals: { pulse: 112, systolic: 96, diastolic: 60, spo2: 93 } });
+  addEvent("R1", i1, { kind: "noteAdded", text: "Fall from ladder, about 2 m. Pain left hip." });
+  join("R2", i1.id);
+  addEvent("R2", i1, { kind: "fieldSet", field: "triage", value: "red" });
+  addEvent("R1", i1, { kind: "legCompleted", legId: myActiveLeg(i1, "R1").id });
+  const i2 = createIncident({ name: "Tore Vang", triage: "green", resource: "R3" }, "INC-4790");
+  addEvent("R3", i2, { kind: "noteAdded", text: "Minor cut, walking patient." });
+  addEvent("R3", i2, { kind: "legCompleted", legId: myActiveLeg(i2, "R3").id });
+}
+
+function createIncident({ name, dob, triage, resource }, id) {
+  const inc = { id: id ?? "INC-" + (4800 + Math.floor(Math.random() * 199)), createdAt: tick(), legs: [] };
+  inc.legs.push({ id: inc.id + "-L1", resourceId: resource, state: "Active", completedAt: null });
+  S.incidents.unshift(inc);
+  for (const [field, value] of [["name", name], ["dob", dob], ["triage", triage]])
+    if (value) S.events.push({ eventId: uuid(), enteredAt: tick(), incidentId: inc.id, source: "eoc", kind: "fieldSet", field, value, stored: true });
+  return inc;
+}
+function join(rid, incId) {
+  if (!S.devices[rid].online) return "Joining needs the network. You are offline.";
+  const inc = S.incidents.find((i) => i.id === incId.trim().toUpperCase());
+  if (!inc) return `No Incident with id "${incId}".`;
+  inc.legs.push({ id: `${inc.id}-L${inc.legs.length + 1}`, resourceId: rid, state: "Active", completedAt: null });
+  return null;
+}
+function addEvent(rid, inc, body) {
+  const d = S.devices[rid];
+  const leg = body.legId ? inc.legs.find((l) => l.id === body.legId) : (myActiveLeg(inc, rid) ?? myLegs(inc, rid).at(-1));
+  const e = { eventId: uuid(), seq: ++d.seq, enteredAt: tick(), incidentId: inc.id, source: "device", deviceId: d.id, resourceId: rid, legId: leg.id, ...body, stored: false };
+  S.events.push(e);
+  if (d.online) store(e);
+}
+function store(e) {
+  e.stored = true;
+  if (e.kind === "legCompleted") { const leg = incById(e.incidentId).legs.find((l) => l.id === e.legId); if (leg.state === "Active") { leg.state = "Completed"; leg.completedAt = e.enteredAt; } }
+}
+function setOnline(rid, on) {
+  S.devices[rid].online = on;
+  if (on) S.events.filter((e) => e.resourceId === rid && !e.stored).sort((a, b) => a.seq - b.seq).forEach(store);
+}
+function reset() { const keep = S.devices; seed(); S.incidents = []; S.events = []; for (const r in keep) S.devices[r] = { ...keep[r], seq: 0 }; S.epoch = "ep-" + Math.random().toString(16).slice(2, 6); }
+
+const incById = (id) => S.incidents.find((i) => i.id === id);
+const myLegs = (inc, rid) => inc.legs.filter((l) => l.resourceId === rid);
+const myActiveLeg = (inc, rid) => inc.legs.find((l) => l.resourceId === rid && l.state === "Active");
+const isClosed = (inc) => !inc.legs.some((l) => l.state === "Active");
+const visibleTo = (rid) => S.incidents.filter((i) => myLegs(i, rid).length);
+const pendingComplete = (inc, rid) => S.events.some((e) => e.incidentId === inc.id && e.resourceId === rid && e.kind === "legCompleted" && !e.stored);
+const offsetOf = (rid) => S.events.filter((e) => e.resourceId === rid && e.stored).length;
+// what a viewer sees: everything stored, plus its own unsent events
+const eventsFor = (incId, viewer) => S.events.filter((e) => e.incidentId === incId && (e.stored || e.resourceId === viewer)).sort((a, b) => a.enteredAt - b.enteredAt);
+const ownLog = (rid) => S.events.filter((e) => e.resourceId === rid).sort((a, b) => a.seq - b.seq);
+
+function fold(evts) {
+  const lww = {}, p = { vitals: [], notes: [] };
+  for (const e of evts) {
+    if (e.kind === "fieldSet") { const c = lww[e.field]; if (!c || e.enteredAt > c.enteredAt || (e.enteredAt === c.enteredAt && e.eventId > c.eventId)) lww[e.field] = e; }
+    if (e.kind === "vitalAdded") p.vitals.push(e);
+    if (e.kind === "noteAdded") p.notes.push(e);
+  }
+  for (const f of ["name", "dob", "triage"]) p[f] = lww[f]?.value ?? null;
+  return p;
+}
+
+// ---------- small render helpers ----------
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const time = (t) => new Date(t).toISOString().slice(11, 19);
+const tri = (t) => t ? `<span class="tri" style="background:var(--${t})"></span>${t}` : `<span class="muted">none</span>`;
+const vitalsText = (v) => [v.pulse && `P ${v.pulse}`, v.systolic && `BP ${v.systolic}/${v.diastolic ?? "?"}`, v.spo2 && `SpO2 ${v.spo2}%`, v.respRate && `RR ${v.respRate}`, v.temperature && `T ${v.temperature}°`].filter(Boolean).join(" · ");
+function summary(e) {
+  if (e.kind === "fieldSet") return `${e.field} = ${e.field === "triage" ? tri(e.value) : esc(e.value)}`;
+  if (e.kind === "vitalAdded") return "vitals " + vitalsText(e.vitals);
+  if (e.kind === "noteAdded") return "note: " + esc(e.text);
+  return "leg completed";
+}
+const who = (e) => e.source === "eoc" ? "EOC" : resName(e.resourceId);
+const syncMark = (e) => e.stored ? `<span class="chip active" title="stored by the Coordinator">stored</span>` : `<span class="chip pending" title="waiting to send">waiting</span>`;
+function incStatus(inc, rid) {
+  if (isClosed(inc)) return `<span class="chip closed">Closed</span>`;
+  if (rid && pendingComplete(inc, rid)) return `<span class="chip pending">completing…</span>`;
+  if (rid && !myActiveLeg(inc, rid)) return `<span class="chip">my leg completed</span>`;
+  return `<span class="chip active">Active</span>`;
+}
+const legsLine = (inc) => inc.legs.map((l) => `${esc(resName(l.resourceId))} <span class="chip ${l.state === "Active" ? "active" : "closed"}">${l.state}</span>`).join(" → ");
+const statusDot = (rid) => S.devices[rid].online ? `<span class="dot on"></span>online` : `<span class="dot off"></span>offline`;
+const resSelect = () => `<select data-change="resource">${RESOURCES.map((r) => `<option value="${r.id}" ${r.id === U.resource ? "selected" : ""}>${r.name}</option>`).join("")}</select>`;
+const copyBtn = (id) => `<button class="small" data-act="copy" data-arg="${id}" title="Copy Incident id">copy id</button>`;
+const val = (id) => document.getElementById(id)?.value?.trim() ?? "";
+
+// ---------- UI state ----------
+const params = new URLSearchParams(location.search);
+const U = {
+  variant: ["A", "B", "C"].includes(params.get("variant")) ? params.get("variant") : "A",
+  page: ["eoc", "device", "coordinator"].includes(params.get("page")) ? params.get("page") : "device",
+  resource: ["R1", "R2", "R3"].includes(params.get("resource")) ? params.get("resource") : "R1",
+  sel: {}, joinErr: null, showState: false, drawer: false, cTab: "note", cMine: false, bCreated: null, cNew: false, bCoordInc: null, flash: null,
+};
+const selInc = () => { const vis = visibleTo(U.resource); const id = U.sel[U.resource]; return vis.find((i) => i.id === id) ?? vis[0] ?? null; };
+
+// ---------- shared editors (used where a variant wants a plain form) ----------
+function fieldRows(p, locked) {
+  return [["name", "Name", "text"], ["dob", "Date of birth", "date"]].map(([f, label, type]) =>
+    `<div class="field"><label>${label}</label><input id="f-${f}" type="${type}" value="${esc(p[f] ?? "")}" ${locked ? "disabled" : ""}><button data-act="setField" data-arg="${f}" ${locked ? "disabled" : ""}>Save</button></div>`).join("") +
+    `<div class="field"><label>Triage</label><select id="f-triage" ${locked ? "disabled" : ""}>${TRIAGE.map((t) => `<option ${t === p.triage ? "selected" : ""}>${t}</option>`).join("")}</select><button data-act="setField" data-arg="triage" ${locked ? "disabled" : ""}>Save</button></div>`;
+}
+const vitalsInputs = (locked) => VITALS.map(([k, label, unit]) => `<label>${label} <span class="muted">${unit}</span><input id="v-${k}" type="number" ${locked ? "disabled" : ""}></label>`).join("");
+
+// ======================= VARIANT A: classic panes =======================
+const A = {
+  name: "Classic panes",
+  eoc() {
+    return `<div class="a-eoc">
+      <div class="panel"><h2>New Incident</h2>
+        <div class="field"><label>Patient name</label><input id="eoc-name" style="grid-column:span 2"></div>
+        <div class="field"><label>Date of birth</label><input id="eoc-dob" type="date" style="grid-column:span 2"></div>
+        <div class="field"><label>Triage</label><select id="eoc-triage" style="grid-column:span 2"><option value="">(none)</option>${TRIAGE.map((t) => `<option>${t}</option>`).join("")}</select></div>
+        <div class="field"><label>First Resource</label><select id="eoc-res" style="grid-column:span 2">${RESOURCES.map((r) => `<option value="${r.id}">${r.name}</option>`).join("")}</select></div>
+        <button class="primary" data-act="create">Create Incident</button>
+        <p class="small muted">Patient fields are optional. The EOC changes nothing after creating.</p>
+      </div>
+      <div class="panel"><h2>Incidents</h2>
+        <table><tr><th>Id</th><th>Patient</th><th>Triage</th><th>Transfer legs</th><th>Status</th><th>Created</th></tr>
+        ${S.incidents.map((i) => { const p = fold(eventsFor(i.id)); return `<tr><td class="mono">${i.id} ${copyBtn(i.id)}</td><td>${esc(p.name ?? "")}</td><td>${tri(p.triage)}</td><td>${legsLine(i)}</td><td>${incStatus(i)}</td><td class="small">${time(i.createdAt)}</td></tr>`; }).join("") || `<tr><td colspan="6" class="muted">No Incidents yet.</td></tr>`}
+        </table></div></div>`;
+  },
+  device() {
+    const rid = U.resource, inc = selInc(), vis = visibleTo(rid);
+    const left = `<div class="panel a-list"><h2>${resSelect()} <span class="small">${statusDot(rid)}</span></h2>
+      <h3>My Incidents</h3>
+      ${vis.map((i) => { const p = fold(eventsFor(i.id, rid)); return `<button class="${inc && i.id === inc.id ? "sel" : ""}" data-act="sel" data-arg="${i.id}"><b class="mono">${i.id}</b> ${incStatus(i, rid)}<br><span class="small">${tri(p.triage)} ${esc(p.name ?? "unnamed")}</span></button>`; }).join("") || `<p class="muted small">No Incidents. Wait for the EOC, or Join one.</p>`}
+      <h3>Join an Incident</h3>
+      <div class="row"><input id="join-id" placeholder="INC-1234" size="10"><button data-act="join">Join</button></div>
+      ${U.joinErr ? `<div class="err-text">${esc(U.joinErr)}</div>` : ""}</div>`;
+    if (!inc) return `<div class="a-device">${left}<div class="panel muted">Select or join an Incident.</div><div class="panel"><h2>My Event log</h2>${A.log(rid)}</div></div>`;
+    const p = fold(eventsFor(inc.id, rid)), locked = isClosed(inc), mine = myActiveLeg(inc, rid);
+    const center = `<div class="panel">
+      <div class="row" style="justify-content:space-between"><h2 class="mono" style="margin:0">${inc.id} ${copyBtn(inc.id)}</h2>${incStatus(inc, rid)}</div>
+      <p class="small">${legsLine(inc)}</p>
+      ${locked ? `<div class="banner">This Incident is Closed. The Patient form is locked until someone Joins.</div>` : ""}
+      <h3>Patient</h3>${fieldRows(p, locked)}
+      <h3>Vitals</h3>
+      <table><tr><th>Time</th><th>By</th><th>Vitals</th></tr>${p.vitals.map((e) => `<tr><td class="small">${time(e.enteredAt)}</td><td class="small">${esc(who(e))}</td><td>${vitalsText(e.vitals)}</td></tr>`).join("")}</table>
+      <div class="b-vit" style="margin-top:6px">${vitalsInputs(locked)}</div><button data-act="addVitals" ${locked ? "disabled" : ""} style="margin-top:6px">Add vitals</button>
+      <h3>Notes</h3>${p.notes.map((e) => `<p class="small"><b>${esc(who(e))}</b> ${time(e.enteredAt)}: ${esc(e.text)}</p>`).join("")}
+      <div class="row"><textarea id="note" rows="2" style="flex:1" ${locked ? "disabled" : ""}></textarea><button data-act="addNote" ${locked ? "disabled" : ""}>Add note</button></div>
+      <h3>My Transfer leg</h3>
+      ${mine && !pendingComplete(inc, rid) ? `<button class="danger" data-act="complete">Complete my leg</button> <span class="small muted">Cannot be undone.</span>` : `<span class="muted small">${pendingComplete(inc, rid) ? "Completion written, waiting to reach the Coordinator." : "You have no Active leg here. Join again to work on it."}</span>`}
+    </div>`;
+    return `<div class="a-device">${left}${center}<div class="panel"><h2>My Event log</h2>${A.log(rid)}</div></div>`;
+  },
+  log(rid) {
+    const log = ownLog(rid);
+    return `<p class="small muted">Device ${S.devices[rid].id} · Offset ${offsetOf(rid)} of ${log.length}</p>
+      <table><tr><th>#</th><th>Event</th><th></th></tr>${log.slice().reverse().map((e) => `<tr><td class="mono">${e.seq}</td><td class="small"><span class="mono">${e.incidentId}</span> ${summary(e)}<br><span class="muted">${time(e.enteredAt)}</span></td><td>${syncMark(e)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Empty.</td></tr>`}</table>`;
+  },
+  coordinator() {
+    const stored = S.events.filter((e) => e.stored).sort((a, b) => a.enteredAt - b.enteredAt);
+    return `<div class="panel" style="margin-bottom:12px"><div class="row" style="justify-content:space-between"><div>Coordinator epoch <b class="mono">${S.epoch}</b></div><button class="danger" data-act="reset">Reset demo</button></div></div>
+      <div class="panel" style="margin-bottom:12px"><h2>Devices</h2><table><tr><th>Device</th><th>Resource</th><th>Connected</th><th>Offset</th></tr>
+      ${RESOURCES.map((r) => `<tr><td class="mono">${S.devices[r.id].id}</td><td>${r.name}</td><td>${statusDot(r.id)}</td><td class="mono">${offsetOf(r.id)}</td></tr>`).join("")}</table></div>
+      <div class="panel"><h2>Merged log <span class="muted small">(${stored.length} events)</span></h2><table><tr><th>Time</th><th>Incident</th><th>Source</th><th>Seq</th><th>Event</th></tr>
+      ${stored.slice().reverse().map((e) => `<tr><td class="small">${time(e.enteredAt)}</td><td class="mono">${e.incidentId}</td><td>${esc(who(e))}${e.deviceId ? ` <span class="muted small mono">${e.deviceId}</span>` : ""}</td><td class="mono">${e.seq ?? ""}</td><td>${summary(e)}</td></tr>`).join("")}</table></div>`;
+  },
+};
+
+// ======================= VARIANT B: tablet, one Incident at a time =======================
+const B = {
+  name: "Tablet, one Incident",
+  eoc() {
+    const created = U.bCreated && incById(U.bCreated);
+    return `<div class="b-eoc">
+      ${created ? `<div class="panel" style="margin-bottom:12px;text-align:center"><p class="muted">Incident created and assigned to <b>${esc(resName(created.legs[0].resourceId))}</b></p><div class="b-incid mono">${created.id}</div><p>${copyBtn(created.id)} <span class="small muted">Read this id to any other Resource that should Join.</span></p><button data-act="bNew">Create another</button></div>` :
+      `<div class="panel"><h2 style="font-size:20px">New Incident</h2>
+        <label class="small muted">Send to</label>
+        <div class="row" style="margin-bottom:12px">${RESOURCES.map((r, i) => `<label class="chip" style="padding:8px 14px"><input type="radio" name="eoc-res" value="${r.id}" ${i === 0 ? "checked" : ""}> ${r.name}</label>`).join("")}</div>
+        <label class="small muted">Patient (optional)</label>
+        <div class="row" style="margin-bottom:8px"><input id="eoc-name" placeholder="Name" style="flex:2"><input id="eoc-dob" type="date" style="flex:1"></div>
+        <div class="b-tri" style="margin-bottom:12px">${TRIAGE.map((t) => `<label style="background:var(--${t});color:#fff;border-radius:6px;padding:10px;text-align:center"><input type="radio" name="eoc-triage" value="${t}"> ${t}</label>`).join("")}</div>
+        <button class="primary b-big" data-act="create">Create and send</button></div>`}
+      <h3>Today</h3>${S.incidents.map((i) => `<div class="row small" style="padding:4px 0;border-bottom:1px solid var(--line)"><b class="mono">${i.id}</b> ${tri(fold(eventsFor(i.id)).triage)} ${esc(fold(eventsFor(i.id)).name ?? "")} <span style="flex:1"></span>${incStatus(i)}</div>`).join("")}
+    </div>`;
+  },
+  device() {
+    const rid = U.resource, inc = selInc(), vis = visibleTo(rid);
+    const top = `<div class="b-top"><span class="b-res">${esc(resName(rid))}</span>${resSelect()}<span class="chip">${statusDot(rid)}</span><span style="flex:1"></span><button data-act="drawer">Event log (${ownLog(rid).length})</button></div>
+      <div class="b-tabs row" style="margin-bottom:12px">${vis.map((i) => `<button class="${inc && i.id === inc.id ? "sel" : ""}" data-act="sel" data-arg="${i.id}">${i.id} ${isClosed(i) ? "· closed" : ""}</button>`).join("")}
+        <span style="flex:1"></span><input id="join-id" placeholder="Incident id" size="9"><button data-act="join">+ Join</button></div>
+      ${U.joinErr ? `<div class="banner err">${esc(U.joinErr)}</div>` : ""}`;
+    const drawer = U.drawer ? `<div class="b-drawer"><div class="row" style="justify-content:space-between"><h2>My Event log</h2><button data-act="drawer">Close</button></div>${A.log(rid)}</div>` : "";
+    if (!inc) return top + `<div class="panel muted" style="text-align:center;padding:40px">No Incident yet. The EOC will send one, or Join with an id.</div>` + drawer;
+    const p = fold(eventsFor(inc.id, rid)), locked = isClosed(inc), mine = myActiveLeg(inc, rid);
+    return top + `${locked ? `<div class="banner">Closed. Patient locked until someone Joins.</div>` : ""}
+      <div class="panel" style="margin-bottom:12px">
+        <div class="row"><span class="b-name">${esc(p.name ?? "Unknown patient")}</span><span class="muted">${esc(p.dob ?? "dob unknown")}</span><span style="flex:1"></span><button class="small" data-act="bEditName" ${locked ? "disabled" : ""}>Edit name / dob</button></div>
+        ${U.bEditName ? `<div class="row" style="margin-top:8px"><input id="f-name" value="${esc(p.name ?? "")}"><button data-act="setField" data-arg="name">Save name</button><input id="f-dob" type="date" value="${esc(p.dob ?? "")}"><button data-act="setField" data-arg="dob">Save dob</button></div>` : ""}
+        <p class="small muted">${legsLine(inc)}</p>
+        <div class="b-tri">${TRIAGE.map((t) => `<button class="${t === p.triage ? "sel" : ""}" style="background:var(--${t})" data-act="triage" data-arg="${t}" ${locked ? "disabled" : ""}>${t}</button>`).join("")}</div>
+      </div>
+      <div class="panel" style="margin-bottom:12px"><h2>Vitals <span class="small muted">${p.vitals.at(-1) ? "last: " + vitalsText(p.vitals.at(-1).vitals) + " by " + esc(who(p.vitals.at(-1))) : ""}</span></h2>
+        <div class="b-vit">${vitalsInputs(locked)}</div><button class="primary b-big" style="margin-top:8px" data-act="addVitals" ${locked ? "disabled" : ""}>Save vitals</button></div>
+      <div class="panel" style="margin-bottom:12px"><h2>Notes</h2>${p.notes.slice(-3).map((e) => `<p class="small"><b>${esc(who(e))}</b>: ${esc(e.text)}</p>`).join("")}
+        <div class="row"><input id="note" style="flex:1;padding:12px" placeholder="Quick note" ${locked ? "disabled" : ""}><button data-act="addNote" ${locked ? "disabled" : ""}>Add</button></div></div>
+      ${mine && !pendingComplete(inc, rid) ? `<button class="danger b-big" data-act="complete">Complete my Transfer leg</button>` : `<div class="banner">${pendingComplete(inc, rid) ? "Completion saved on this Device, waiting to reach the Coordinator." : "Your leg here is completed. You can still edit while the Incident is Active."}</div>`}
+      ${drawer}`;
+  },
+  coordinator() {
+    const inc = incById(U.bCoordInc) ?? S.incidents[0];
+    const p = inc && fold(eventsFor(inc.id));
+    return `<div class="b-coord">
+      <div class="panel"><h2>Incidents</h2>${S.incidents.map((i) => `<button style="display:block;width:100%;text-align:left;margin-bottom:6px;${inc && i.id === inc.id ? "border-color:var(--accent)" : ""}" data-act="bCoordInc" data-arg="${i.id}"><b class="mono">${i.id}</b> ${incStatus(i)}</button>`).join("") || `<p class="muted">None.</p>`}
+        <h3>Devices</h3>${RESOURCES.map((r) => `<div class="small">${statusDot(r.id)} ${r.name} <span class="mono muted">${S.devices[r.id].id}</span> · Offset <b>${offsetOf(r.id)}</b></div>`).join("")}
+        <h3>Demo</h3><div class="small muted">epoch <span class="mono">${S.epoch}</span></div><button class="danger" data-act="reset" style="margin-top:6px">Reset</button></div>
+      <div class="panel">${inc ? `<h2 class="mono">${inc.id}</h2><p class="small">${legsLine(inc)}</p>
+        <h3>Patient projection</h3><p><b>${esc(p.name ?? "unnamed")}</b> · ${esc(p.dob ?? "dob ?")} · ${tri(p.triage)} · ${p.vitals.length} vitals · ${p.notes.length} notes</p>
+        <h3>Events of this Incident</h3><table><tr><th>Time</th><th>Source</th><th>Seq</th><th>Event</th></tr>${eventsFor(inc.id).map((e) => `<tr><td class="small">${time(e.enteredAt)}</td><td>${esc(who(e))}</td><td class="mono">${e.seq ?? ""}</td><td>${summary(e)}</td></tr>`).join("")}</table>` : `<p class="muted">No Incident.</p>`}</div></div>`;
+  },
+};
+
+// ======================= VARIANT C: timeline / feed =======================
+const C = {
+  name: "Feed and swimlanes",
+  eoc() {
+    const col = (title, list) => `<div><h3>${title} (${list.length})</h3>${list.map((i) => { const p = fold(eventsFor(i.id)); return `<div class="c-card"><div class="row"><b class="mono">${i.id}</b>${copyBtn(i.id)}<span style="flex:1"></span>${tri(p.triage)}</div><div>${esc(p.name ?? "unnamed")}</div><div class="small muted">${legsLine(i)}</div></div>`; }).join("")}</div>`;
+    return `<div class="row" style="margin-bottom:10px"><h2 style="margin:0">EOC board</h2><span style="flex:1"></span><button class="primary" data-act="cNew">+ New Incident</button></div>
+      ${U.cNew ? `<div class="panel row" style="margin-bottom:12px"><input id="eoc-name" placeholder="Patient name"><input id="eoc-dob" type="date"><select id="eoc-triage"><option value="">triage</option>${TRIAGE.map((t) => `<option>${t}</option>`).join("")}</select><select id="eoc-res">${RESOURCES.map((r) => `<option value="${r.id}">${r.name}</option>`).join("")}</select><button class="primary" data-act="create">Create</button><button data-act="cNew">Cancel</button></div>` : ""}
+      <div class="c-board">${col("Active", S.incidents.filter((i) => !isClosed(i)))}${col("Closed", S.incidents.filter(isClosed))}</div>`;
+  },
+  device() {
+    const rid = U.resource, inc = selInc(), vis = visibleTo(rid);
+    const head = `<div class="panel row">${resSelect()}<span class="chip">${statusDot(rid)}</span>
+      <select data-change="sel">${vis.map((i) => `<option value="${i.id}" ${inc && i.id === inc.id ? "selected" : ""}>${i.id}${isClosed(i) ? " (closed)" : ""}</option>`).join("")}</select>
+      <span style="flex:1"></span><input id="join-id" placeholder="Join by Incident id" size="14"><button data-act="join">Join</button>
+      ${U.joinErr ? `<div class="err-text" style="width:100%">${esc(U.joinErr)}</div>` : ""}</div>`;
+    if (!inc) return `<div class="c-wrap">${head}<p class="muted">Nothing here yet.</p></div>`;
+    const evts = eventsFor(inc.id, rid), p = fold(evts), locked = isClosed(inc), mine = myActiveLeg(inc, rid);
+    const lastV = p.vitals.at(-1);
+    const feed = (U.cMine ? evts.filter((e) => e.resourceId === rid) : evts).map((e) => {
+      const cls = e.source === "eoc" ? "eoc" : e.resourceId === rid ? "mine" : "";
+      if (e.kind === "legCompleted") return `<div class="c-msg sys">${esc(who(e))} completed their Transfer leg · ${time(e.enteredAt)} ${e.resourceId === rid ? syncMark(e) : ""}</div>`;
+      return `<div class="c-msg ${cls}"><div class="small muted">${esc(who(e))} · ${time(e.enteredAt)} ${e.seq && e.resourceId === rid ? `· #${e.seq} ${syncMark(e)}` : ""}</div>${summary(e)}</div>`;
+    }).join("");
+    const tabs = ["note", "vitals", "name", "dob", "triage", "complete"];
+    const comp = {
+      note: `<div class="row"><input id="note" style="flex:1" placeholder="Write a note"><button class="primary" data-act="addNote">Send</button></div>`,
+      vitals: `<div class="b-vit">${vitalsInputs(false)}</div><button class="primary" data-act="addVitals" style="margin-top:6px">Send vitals</button>`,
+      name: `<div class="row"><input id="f-name" value="${esc(p.name ?? "")}"><button class="primary" data-act="setField" data-arg="name">Set name</button></div>`,
+      dob: `<div class="row"><input id="f-dob" type="date" value="${esc(p.dob ?? "")}"><button class="primary" data-act="setField" data-arg="dob">Set date of birth</button></div>`,
+      triage: `<div class="row">${TRIAGE.map((t) => `<button style="background:var(--${t});color:#fff" data-act="triage" data-arg="${t}">${t}</button>`).join("")}</div>`,
+      complete: mine && !pendingComplete(inc, rid) ? `<button class="danger" data-act="complete">Complete my Transfer leg (cannot be undone)</button>` : `<span class="muted">No Active leg of yours here.</span>`,
+    };
+    return `<div class="c-wrap">${head}
+      <div class="panel c-pin"><div class="row"><b style="font-size:18px">${esc(p.name ?? "Unknown patient")}</b><span class="muted">${esc(p.dob ?? "")}</span>${tri(p.triage)}<span style="flex:1"></span>${incStatus(inc, rid)}</div>
+        <div class="small">${lastV ? "Latest vitals: " + vitalsText(lastV.vitals) : "No vitals yet"}</div><div class="small muted">${legsLine(inc)}</div></div>
+      <label class="small"><input type="checkbox" data-change="cMine" ${U.cMine ? "checked" : ""}> Only my Event log</label>
+      <div class="c-feed">${feed}</div>
+      <div class="panel" style="position:sticky;bottom:60px">${locked ? `<div class="banner" style="margin:0">Closed. Join again to keep writing.</div>` :
+        `<div class="row c-seg" style="gap:0;margin-bottom:8px">${tabs.map((t) => `<button class="${U.cTab === t ? "sel" : ""}" data-act="cTab" data-arg="${t}">${t}</button>`).join("")}</div>${comp[U.cTab]}`}</div></div>`;
+  },
+  coordinator() {
+    const lane = (title, sub, list, offset) => `<div class="c-lane"><h3>${title}</h3><div class="small muted">${sub}</div>
+      ${offset !== undefined ? `<div class="c-offset">Offset ${offset}</div>` : `<div style="height:22px"></div>`}
+      ${list.slice().reverse().map((e) => `<div class="ev"><span class="mono">${e.seq ? "#" + e.seq : ""}</span> <span class="mono muted">${e.incidentId}</span><br>${summary(e)}</div>`).join("")}</div>`;
+    return `<div class="row" style="margin-bottom:10px"><h2 style="margin:0">Coordinator</h2><span class="small muted">epoch <span class="mono">${S.epoch}</span></span><span style="flex:1"></span><button class="danger" data-act="reset">Reset</button></div>
+      <p class="small muted">One lane per Device, newest on top. The dashed line is the Offset: everything the Coordinator has stored from that Device without gaps.</p>
+      <div class="c-lanes">${RESOURCES.map((r) => lane(`${statusDot(r.id)} ${r.name}`, `<span class="mono">${S.devices[r.id].id}</span>`, S.events.filter((e) => e.resourceId === r.id && e.stored).sort((a, b) => a.seq - b.seq), offsetOf(r.id))).join("")}
+      ${lane("EOC", "written by the Coordinator", S.events.filter((e) => e.source === "eoc"))}</div>`;
+  },
+};
+
+// ---------- shell ----------
+const VARIANTS = { A, B, C };
+function render() {
+  const v = VARIANTS[U.variant];
+  const q = new URLSearchParams({ variant: U.variant, page: U.page, resource: U.resource });
+  try { history.replaceState(null, "", "?" + q); } catch {}
+  document.getElementById("app").innerHTML = `
+    <div class="proto-top"><b>PROTOTYPE</b> Pages (separate tabs in the real demo):
+      ${[["eoc", "EOC"], ["device", "Device"], ["coordinator", "Coordinator"]].map(([k, l]) => `<button class="${U.page === k ? "cur" : ""}" data-act="page" data-arg="${k}">${l}</button>`).join("")}
+      <span style="flex:1"></span>
+      Simulate network for ${esc(resName(U.resource))}: <button data-act="online">${S.devices[U.resource].online ? "go offline" : "go online"}</button>
+      <button data-act="state">${U.showState ? "hide" : "show"} state</button></div>
+    <main>${U.flash ? `<div class="banner">${esc(U.flash)}</div>` : ""}${v[U.page]()}</main>
+    ${U.showState ? `<div class="proto-state">${esc(JSON.stringify({ ui: { variant: U.variant, page: U.page, resource: U.resource }, epoch: S.epoch, devices: S.devices, offsets: Object.fromEntries(RESOURCES.map((r) => [r.id, offsetOf(r.id)])), incidents: S.incidents, events: S.events }, null, 1))}</div>` : ""}
+    <div class="proto-switch"><button data-act="prev">‹</button><span>${U.variant} (${v.name})</span><button data-act="next">›</button></div>`;
+  U.flash = null;
+}
+function cycle(d) { const k = Object.keys(VARIANTS); U.variant = k[(k.indexOf(U.variant) + d + k.length) % k.length]; }
+
+const ACT = {
+  page: (a) => { U.page = a; }, prev: () => cycle(-1), next: () => cycle(1), state: () => { U.showState = !U.showState; },
+  online: () => setOnline(U.resource, !S.devices[U.resource].online),
+  sel: (a) => { U.sel[U.resource] = a; U.joinErr = null; },
+  join: () => { const id = val("join-id").toUpperCase(); U.joinErr = join(U.resource, id); if (!U.joinErr) U.sel[U.resource] = id; },
+  setField: (f) => { const v = val("f-" + f); if (v) addEvent(U.resource, selInc(), { kind: "fieldSet", field: f, value: v }); U.bEditName = false; },
+  triage: (t) => addEvent(U.resource, selInc(), { kind: "fieldSet", field: "triage", value: t }),
+  addVitals: () => { const v = {}; for (const [k] of VITALS) { const n = val("v-" + k); if (n) v[k] = Number(n); } if (Object.keys(v).length) addEvent(U.resource, selInc(), { kind: "vitalAdded", vitals: v }); else U.flash = "Enter at least one vital."; },
+  addNote: () => { const t = val("note"); if (t) addEvent(U.resource, selInc(), { kind: "noteAdded", text: t }); },
+  complete: () => { const inc = selInc(); if (confirm("Complete your Transfer leg? This cannot be undone.")) addEvent(U.resource, inc, { kind: "legCompleted", legId: myActiveLeg(inc, U.resource).id }); },
+  create: () => {
+    const radio = (n) => document.querySelector(`input[name="${n}"]:checked`)?.value;
+    const inc = createIncident({ name: val("eoc-name"), dob: val("eoc-dob"), triage: val("eoc-triage") || radio("eoc-triage"), resource: val("eoc-res") || radio("eoc-res") });
+    U.bCreated = inc.id; U.cNew = false; U.flash = `Created ${inc.id} for ${resName(inc.legs[0].resourceId)}.`;
+  },
+  copy: (id) => { navigator.clipboard?.writeText(id); U.flash = `Copied ${id}.`; },
+  reset: () => { if (confirm("Reset clears every Incident and event. Devices clear themselves when they see the new epoch.")) { reset(); U.sel = {}; U.flash = "Reset done: new epoch."; } },
+  drawer: () => { U.drawer = !U.drawer; }, bNew: () => { U.bCreated = null; }, bEditName: () => { U.bEditName = !U.bEditName; },
+  bCoordInc: (a) => { U.bCoordInc = a; }, cTab: (a) => { U.cTab = a; }, cNew: () => { U.cNew = !U.cNew; },
+};
+document.addEventListener("click", (ev) => { const b = ev.target.closest("[data-act]"); if (!b) return; ACT[b.dataset.act]?.(b.dataset.arg); render(); });
+document.addEventListener("change", (ev) => {
+  const c = ev.target.dataset.change; if (!c) return;
+  if (c === "resource") { U.resource = ev.target.value; U.joinErr = null; }
+  if (c === "sel") U.sel[U.resource] = ev.target.value;
+  if (c === "cMine") U.cMine = ev.target.checked;
+  render();
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.target.closest("input, textarea, select, [contenteditable]")) return;
+  if (ev.key === "ArrowLeft") { cycle(-1); render(); }
+  if (ev.key === "ArrowRight") { cycle(1); render(); }
+});
+seed();
+render();
+</script>
+</body>
+</html>
