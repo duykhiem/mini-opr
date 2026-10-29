@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import type { Event, Triage } from "../shared/event.ts";
+import type { Incident, TransferLeg } from "../shared/incident.ts";
+import { applyEvent, emptyPatient, type PatientState } from "../shared/patient.ts";
 import type { Resource } from "../shared/resource.ts";
+import { uuidv7 } from "../shared/uuidv7.ts";
+import type { DeviceStatus, StoredEvent } from "../shared/watch.ts";
 
 // Tables from ADR 0006.
 const schema = `
@@ -86,4 +91,86 @@ export function readEpoch(db: DatabaseSync): string {
 
 export function listResources(db: DatabaseSync): Resource[] {
   return db.prepare("SELECT resourceId, name FROM resources ORDER BY resourceId").all() as Resource[];
+}
+
+export type NewIncident = { resourceId: string; name?: string; dob?: string; triage?: Triage };
+
+// The next INC- number; ids are unique within a Coordinator epoch because Reset clears incidents.
+function nextIncidentId(db: DatabaseSync): string {
+  const row = db
+    .prepare("SELECT COALESCE(MAX(CAST(substr(incidentId, 5) AS INTEGER)), 0) + 1 AS next FROM incidents")
+    .get() as { next: number };
+  return `INC-${String(row.next).padStart(4, "0")}`;
+}
+
+// The Incident, its first Transfer leg, an empty Patient and one EOC fieldSet per given field, in one transaction (ADR 0006).
+export function createIncident(db: DatabaseSync, input: NewIncident, now: number): { incident: Incident; events: StoredEvent[] } {
+  return transaction(db, () => {
+    const incidentId = nextIncidentId(db);
+    const patientId = randomUUID();
+    db.prepare("INSERT INTO incidents (incidentId, createdAt) VALUES (?, ?)").run(incidentId, now);
+    db.prepare("INSERT INTO transfer_legs (legId, incidentId, resourceId, createdAt) VALUES (?, ?, ?, ?)").run(
+      randomUUID(),
+      incidentId,
+      input.resourceId,
+      now,
+    );
+
+    const base = { enteredAt: now, incidentId, patientId, source: { type: "eoc" } } as const;
+    const fieldEvents: Event[] = [];
+    if (input.name !== undefined) fieldEvents.push({ ...base, eventId: uuidv7(now), kind: "fieldSet", field: "name", value: input.name });
+    if (input.dob !== undefined) fieldEvents.push({ ...base, eventId: uuidv7(now), kind: "fieldSet", field: "dob", value: input.dob });
+    if (input.triage !== undefined) fieldEvents.push({ ...base, eventId: uuidv7(now), kind: "fieldSet", field: "triage", value: input.triage });
+
+    const insertEvent = db.prepare(
+      "INSERT INTO events (eventId, incidentId, kind, enteredAt, deviceId, seq, body) VALUES (?, ?, ?, ?, NULL, NULL, ?)",
+    );
+    const events = fieldEvents.map((event): StoredEvent => {
+      const { lastInsertRowid } = insertEvent.run(event.eventId, incidentId, event.kind, event.enteredAt, JSON.stringify(event));
+      return { rowid: Number(lastInsertRowid), deviceId: null, seq: null, event };
+    });
+    const state = fieldEvents.reduce(applyEvent, emptyPatient);
+    db.prepare("INSERT INTO patients (patientId, incidentId, state) VALUES (?, ?, ?)").run(patientId, incidentId, JSON.stringify(state));
+
+    return { incident: readIncident(db, incidentId), events };
+  });
+}
+
+function readIncident(db: DatabaseSync, incidentId: string): Incident {
+  const { createdAt } = db.prepare("SELECT createdAt FROM incidents WHERE incidentId = ?").get(incidentId) as { createdAt: number };
+  const legs = db
+    .prepare("SELECT legId, resourceId, createdAt, completedAt FROM transfer_legs WHERE incidentId = ? ORDER BY createdAt, rowid")
+    .all(incidentId) as TransferLeg[];
+  const patient = db.prepare("SELECT patientId, state FROM patients WHERE incidentId = ?").get(incidentId) as {
+    patientId: string;
+    state: string;
+  };
+  return {
+    incidentId,
+    createdAt,
+    closed: legs.every((leg) => leg.completedAt !== null),
+    legs,
+    patientId: patient.patientId,
+    patient: JSON.parse(patient.state) as PatientState,
+  };
+}
+
+export function listIncidents(db: DatabaseSync): Incident[] {
+  const rows = db.prepare("SELECT incidentId FROM incidents ORDER BY createdAt, incidentId").all() as { incidentId: string }[];
+  return rows.map((row) => readIncident(db, row.incidentId));
+}
+
+export function listEvents(db: DatabaseSync): StoredEvent[] {
+  const rows = db.prepare("SELECT rowid, deviceId, seq, body FROM events ORDER BY rowid").all() as {
+    rowid: number;
+    deviceId: string | null;
+    seq: number | null;
+    body: string;
+  }[];
+  return rows.map(({ body, ...row }) => ({ ...row, event: JSON.parse(body) as Event }));
+}
+
+// Without connectivity, which only the Coordinator knows (ADR 0008).
+export function listDevices(db: DatabaseSync): Omit<DeviceStatus, "connected">[] {
+  return db.prepare('SELECT deviceId, resourceId, "offset" FROM devices ORDER BY deviceId').all() as Omit<DeviceStatus, "connected">[];
 }

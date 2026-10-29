@@ -1,6 +1,8 @@
 // Event schema from ADR 0003.
 
-export type Triage = "red" | "orange" | "yellow" | "green" | "blue";
+export const triages = ["red", "orange", "yellow", "green", "blue"] as const;
+
+export type Triage = (typeof triages)[number];
 
 export type Vitals = {
   // at least one present

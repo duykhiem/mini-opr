@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": `http://localhost:${coordinatorPort}`,
+      "/watch": { target: `ws://localhost:${coordinatorPort}`, ws: true },
     },
   },
 });

@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { Incident } from "../shared/incident.ts";
+import type { WatchMessage } from "../shared/watch.ts";
 import { startCoordinator, type Coordinator } from "./coordinator.ts";
 
 const started: Coordinator[] = [];
@@ -50,5 +52,145 @@ describe("Coordinator", () => {
       await closeAll();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+function postIncident(coordinator: Coordinator, body: unknown): Promise<Response> {
+  return fetch(`http://localhost:${coordinator.port}/api/incidents`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("Creating an Incident", () => {
+  it("returns 201 with the first Transfer leg and the given Patient fields in the projection", async () => {
+    const coordinator = await start(":memory:");
+
+    const response = await postIncident(coordinator, {
+      resourceId: "bravo-2",
+      name: "Kari Nordmann",
+      dob: "1970-01-31",
+      triage: "red",
+    });
+
+    expect(response.status).toBe(201);
+    const { incident } = (await response.json()) as { incident: Incident };
+    expect(incident.closed).toBe(false);
+    expect(incident.legs).toEqual([expect.objectContaining({ resourceId: "bravo-2", completedAt: null })]);
+    expect(incident.patient.name?.value).toBe("Kari Nordmann");
+    expect(incident.patient.dob?.value).toBe("1970-01-31");
+    expect(incident.patient.triage?.value).toBe("red");
+  });
+
+  it("returns an empty Patient when no fields are given", async () => {
+    const coordinator = await start(":memory:");
+
+    const response = await postIncident(coordinator, { resourceId: "alpha-1" });
+
+    expect(response.status).toBe(201);
+    const { incident } = (await response.json()) as { incident: Incident };
+    expect(incident.patient).toEqual({ vitals: [], notes: [] });
+  });
+
+  it("gives each Incident a distinct INC- id", async () => {
+    const coordinator = await start(":memory:");
+
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const response = await postIncident(coordinator, { resourceId: "alpha-1" });
+      ids.push(((await response.json()) as { incident: Incident }).incident.incidentId);
+    }
+
+    for (const id of ids) expect(id).toMatch(/^INC-\d+$/);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it.each([
+    ["an unknown resourceId", { resourceId: "zulu-9" }],
+    ["no resourceId", { name: "Kari Nordmann" }],
+    ["a blank name", { resourceId: "alpha-1", name: "  " }],
+    ["a dob that is not YYYY-MM-DD", { resourceId: "alpha-1", dob: "31.01.1970" }],
+    ["a dob that is not a real date", { resourceId: "alpha-1", dob: "1970-02-30" }],
+    ["an unknown triage", { resourceId: "alpha-1", triage: "purple" }],
+    ["a body that is not an object", ["alpha-1"]],
+  ])("returns 400 and creates nothing for %s", async (_, body) => {
+    const coordinator = await start(":memory:");
+
+    const response = await postIncident(coordinator, body);
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toEqual(expect.any(String));
+    const after = await postIncident(coordinator, { resourceId: "alpha-1" });
+    expect(((await after.json()) as { incident: Incident }).incident.incidentId).toBe("INC-0001");
+  });
+});
+
+// A raw /watch socket that hands out its messages one at a time, in arrival order.
+function openWatchSocket(coordinator: Coordinator): { next(): Promise<WatchMessage>; send(message: unknown): void } {
+  const socket = new WebSocket(`ws://localhost:${coordinator.port}/watch`);
+  const received: WatchMessage[] = [];
+  let notify = () => {};
+  socket.addEventListener("message", (e) => {
+    received.push(JSON.parse(String(e.data)) as WatchMessage);
+    notify();
+  });
+  const opened = new Promise((resolve) => socket.addEventListener("open", resolve));
+  return {
+    async next() {
+      while (received.length === 0) await new Promise<void>((resolve) => (notify = resolve));
+      return received.shift()!;
+    },
+    send: (message) => void opened.then(() => socket.send(JSON.stringify(message))),
+  };
+}
+
+describe("The /watch socket", () => {
+  it("sends a snapshot with the Incidents and their stored EOC events on connect", async () => {
+    const coordinator = await start(":memory:");
+    const created = await postIncident(coordinator, { resourceId: "alpha-1", name: "Kari Nordmann", triage: "yellow" });
+    const { incident } = (await created.json()) as { incident: Incident };
+
+    const message = await openWatchSocket(coordinator).next();
+
+    expect(message).toMatchObject({ type: "snapshot", epoch: coordinator.epoch, incidents: [incident], devices: [] });
+    const { events } = message as Extract<WatchMessage, { type: "snapshot" }>;
+    expect(events.map((e) => [e.deviceId, e.seq, e.event.source.type, e.event.incidentId])).toEqual([
+      [null, null, "eoc", incident.incidentId],
+      [null, null, "eoc", incident.incidentId],
+    ]);
+    expect(events.map((e) => e.event)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "fieldSet", field: "name", value: "Kari Nordmann", patientId: incident.patientId }),
+        expect.objectContaining({ kind: "fieldSet", field: "triage", value: "yellow", patientId: incident.patientId }),
+      ]),
+    );
+    expect(events[0]!.rowid).toBeLessThan(events[1]!.rowid);
+  });
+
+  it("sends the whole Incident, then its EOC events, after a create", async () => {
+    const coordinator = await start(":memory:");
+    const watch = openWatchSocket(coordinator);
+    expect(await watch.next()).toMatchObject({ type: "snapshot", incidents: [], events: [] });
+
+    const created = await postIncident(coordinator, { resourceId: "charlie-3", dob: "1985-06-15" });
+    const { incident } = (await created.json()) as { incident: Incident };
+
+    expect(await watch.next()).toEqual({ type: "incident", incident });
+    const events = await watch.next();
+    expect(events).toMatchObject({
+      type: "events",
+      events: [{ deviceId: null, seq: null, event: { kind: "fieldSet", field: "dob", value: "1985-06-15", source: { type: "eoc" } } }],
+    });
+  });
+
+  it("answers a ping with a pong", async () => {
+    const coordinator = await start(":memory:");
+    const watch = openWatchSocket(coordinator);
+    await watch.next();
+
+    watch.send({ type: "ping" });
+
+    expect(await watch.next()).toEqual({ type: "pong" });
   });
 });
