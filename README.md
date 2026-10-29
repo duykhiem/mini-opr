@@ -8,13 +8,11 @@ It is a demo of how a One Patient Record (OPR) should behave. It is not a produc
 
 ## Pages
 
-The demo is manual: open the EOC page, three Device tabs and the Coordinator page.
+The demo is manual. A start page links to the EOC page, one Device tab for each of the three Resources, and the Coordinator page; each opens in its own tab.
 
-- **EOC page.** Creates Incidents. Each Incident has one Patient and its Transfer legs. The EOC creates only the first leg, for one Resource, and changes nothing after that. The EOC is not a Device and has no Event log. When it creates an Incident, it may give the Patient's name, date of birth and triage.
-- **Device page.** One browser tab. It picks one of three seeded Resources, from a dropdown or the `?resource=` URL param. There is no auth. It lists the Transfer legs of its Resource, and can Join an Incident by pasting its Incident id.
-- **Coordinator page.** Shows the merged log and each Device's offset.
-
-A Reset exists.
+- **EOC page.** Creates Incidents. Each Incident has one Patient and its Transfer legs. The EOC creates only the first leg, for one Resource, and changes nothing after that. The EOC is not a Device and has no Event log. When it creates an Incident, it may give the Patient's name, date of birth and triage. It lists every Incident with its short id, such as `INC-4821`, which other Resources use to Join.
+- **Device page.** One browser tab. It picks one of three seeded Resources, from a dropdown or the `?resource=` URL param. There is no auth. It lists the Incidents its Resource works on, and can Join an Incident by its id. For the chosen Incident it shows the Patient at the top, every change from every Resource in time order, and its own Event log.
+- **Coordinator page.** Shows each Device's events and Offset side by side, and the merged log. The Reset button lives here.
 
 ## How it works
 
