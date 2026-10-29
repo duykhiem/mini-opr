@@ -1,0 +1,6 @@
+node_modules/
+out/
+# Made by npm run record; recorded again whenever the app changes.
+public/clips/
+public/music.mp3
+public/music.mp3
