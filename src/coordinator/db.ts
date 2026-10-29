@@ -174,3 +174,33 @@ export function listEvents(db: DatabaseSync): StoredEvent[] {
 export function listDevices(db: DatabaseSync): Omit<DeviceStatus, "connected">[] {
   return db.prepare('SELECT deviceId, resourceId, "offset" FROM devices ORDER BY deviceId').all() as Omit<DeviceStatus, "connected">[];
 }
+
+export function resourceExists(db: DatabaseSync, resourceId: string): boolean {
+  return db.prepare("SELECT 1 FROM resources WHERE resourceId = ?").get(resourceId) !== undefined;
+}
+
+// Written on hello; returns the Device's Offset, 0 for a Device not seen before.
+export function registerDevice(db: DatabaseSync, deviceId: string, resourceId: string): number {
+  db.prepare("INSERT OR IGNORE INTO devices (deviceId, resourceId) VALUES (?, ?)").run(deviceId, resourceId);
+  const row = db.prepare(`SELECT "offset" FROM devices WHERE deviceId = ?`).get(deviceId) as { offset: number };
+  return row.offset;
+}
+
+// Every Incident the Resource has a leg in, with its legs and all its events.
+export function snapshotFor(db: DatabaseSync, resourceId: string): { incidents: Incident[]; events: Event[] } {
+  const rows = db
+    .prepare(
+      `SELECT incidentId FROM incidents i
+       WHERE EXISTS (SELECT 1 FROM transfer_legs l WHERE l.incidentId = i.incidentId AND l.resourceId = ?)
+       ORDER BY createdAt, incidentId`,
+    )
+    .all(resourceId) as { incidentId: string }[];
+  const eventsOf = db.prepare("SELECT body FROM events WHERE incidentId = ? ORDER BY rowid");
+
+  return {
+    incidents: rows.map((row) => readIncident(db, row.incidentId)),
+    events: rows.flatMap((row) =>
+      (eventsOf.all(row.incidentId) as { body: string }[]).map((r) => JSON.parse(r.body) as Event),
+    ),
+  };
+}

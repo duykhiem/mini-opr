@@ -16,3 +16,7 @@ export type Incident = {
   patientId: string;
   patient: PatientState; // from the projection
 };
+
+export function isActive(leg: TransferLeg): boolean {
+  return leg.completedAt === null;
+}

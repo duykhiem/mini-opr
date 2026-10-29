@@ -1,10 +1,20 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { deviceSocketPath } from "../shared/protocol.ts";
+import type { DeviceStatus } from "../shared/watch.ts";
 import { createIncident, listDevices, listEvents, listIncidents, listResources, openDatabase, readEpoch } from "./db.ts";
+import { createDeviceChannel } from "./deviceSocket.ts";
 import { parseNewIncident } from "./newIncident.ts";
 import { createWatchChannel } from "./watch.ts";
 
-export type Coordinator = { port: number; epoch: string; close(): Promise<void> };
+export type Coordinator = {
+  port: number;
+  epoch: string;
+  listDevices(): Omit<DeviceStatus, "connected">[];
+  // Reset closes every Device socket (ADR 0005); each Device then reconnects.
+  closeDeviceSockets(): void;
+  close(): Promise<void>;
+};
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
@@ -20,13 +30,15 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 // The caller picks the database path and port, so a test can use ":memory:" and port 0.
 export async function startCoordinator(options: { dbPath: string; port: number }): Promise<Coordinator> {
   const db = openDatabase(options.dbPath);
-  // No Device protocol yet, so no Device is connected.
+  // Connectivity is not tracked yet, so every Device shows disconnected.
   const watch = createWatchChannel(() => ({
     epoch: readEpoch(db),
     incidents: listIncidents(db),
     events: listEvents(db),
     devices: listDevices(db).map((device) => ({ ...device, connected: false })),
   }));
+
+  const devices = createDeviceChannel(db);
 
   const server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -63,6 +75,7 @@ export async function startCoordinator(options: { dbPath: string; port: number }
   server.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     if (path === "/watch") watch.handleUpgrade(req, socket, head);
+    else if (path === deviceSocketPath) devices.handleUpgrade(req, socket, head);
     else socket.destroy();
   });
 
@@ -73,6 +86,7 @@ export async function startCoordinator(options: { dbPath: string; port: number }
   const close = () =>
     (closing ??= new Promise<void>((resolve, reject) => {
       watch.close();
+      devices.close();
       server.closeAllConnections();
       server.close((error) => {
         db.close();
@@ -81,5 +95,11 @@ export async function startCoordinator(options: { dbPath: string; port: number }
       });
     }));
 
-  return { port: (server.address() as AddressInfo).port, epoch: readEpoch(db), close };
+  return {
+    port: (server.address() as AddressInfo).port,
+    epoch: readEpoch(db),
+    listDevices: () => listDevices(db),
+    closeDeviceSockets: () => devices.closeSockets(),
+    close,
+  };
 }

@@ -19,7 +19,7 @@ export type PatientState = {
 export const emptyPatient: PatientState = { vitals: [], notes: [] };
 
 // Orders by enteredAt, then by eventId (string compare of UUIDv7).
-function compareStamps(a: Stamp, b: Stamp): number {
+export function compareStamps(a: Stamp, b: Stamp): number {
   if (a.enteredAt !== b.enteredAt) return a.enteredAt - b.enteredAt;
   return a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0;
 }
