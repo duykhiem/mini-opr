@@ -133,6 +133,11 @@ code {
   padding: 20px;
 }
 
+/* Data from /watch while the socket is down */
+.dimmed {
+  opacity: 0.5;
+}
+
 .eoc-layout {
   display: grid;
   grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
@@ -235,10 +240,6 @@ button {
   padding: 0;
   overflow-x: auto;
   transition: opacity 0.2s;
-}
-
-.table-card.dimmed {
-  opacity: 0.5;
 }
 
 .table-card h2 {
@@ -352,6 +353,128 @@ tr.highlight td {
   align-items: center;
   gap: 8px;
   white-space: nowrap;
+}
+
+/* Coordinator page */
+
+.epoch {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.view-toggle {
+  display: inline-flex;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.view-toggle button {
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: none;
+  border-radius: 0;
+}
+
+.view-toggle button + button {
+  border-left: 1px solid var(--border);
+}
+
+.view-toggle button[aria-pressed="true"] {
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.coordinator-data {
+  display: grid;
+  gap: 20px;
+  transition: opacity 0.2s;
+}
+
+.lanes-card {
+  padding: 16px 0 20px;
+}
+
+.lanes-card h2 {
+  padding: 0 20px 12px;
+}
+
+.lanes {
+  display: grid;
+  gap: 10px;
+  padding: 0 20px;
+  overflow-x: auto;
+}
+
+.lane {
+  display: grid;
+  grid-template-columns: 150px max-content;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.lane-label {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  font-size: 0.85rem;
+  background: var(--surface);
+}
+
+.lane-track {
+  position: relative;
+  display: grid;
+  min-height: 64px;
+  margin: 6px 0;
+  background: var(--surface-muted);
+  border-radius: 6px;
+}
+
+.lane-event {
+  display: grid;
+  gap: 2px;
+  grid-row: 1;
+  min-width: 0;
+  margin: 6px 4px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.lane-event.above-offset {
+  border-style: dashed;
+  opacity: 0.6;
+}
+
+.lane-event-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.lane-event-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.offset-line {
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  margin-left: -1px;
+  border-left: 2px solid var(--accent);
 }
 
 /* Start page */
