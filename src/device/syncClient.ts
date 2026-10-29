@@ -1,6 +1,6 @@
 import type { Event } from "../shared/event.ts";
 import type { Incident } from "../shared/incident.ts";
-import type { CoordinatorMessage, DeviceMessage } from "../shared/protocol.ts";
+import type { CoordinatorMessage, DeviceMessage, JoinRejectReason } from "../shared/protocol.ts";
 
 // The part of localStorage the client uses, so tests can pass an in-memory one.
 export type KeyValueStore = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -15,9 +15,14 @@ export type SyncState = {
   error: string | null;
 };
 
+// "offline": the Device was not online, or the socket closed before a reply.
+export type JoinResult = { ok: true } | { ok: false; reason: "offline" | JoinRejectReason };
+
 export type SyncClient = {
   start(): void;
   stop(): void;
+  // Join needs the network: it goes over this Device's socket and never waits for a reconnect.
+  join(incidentId: string): Promise<JoinResult>;
   getState(): SyncState;
   subscribe(listener: () => void): () => void;
 };
@@ -60,6 +65,14 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   let pingTimer: ReturnType<typeof setInterval> | undefined;
   let pongTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  // Joins waiting for a reply, matched by incidentId.
+  const pendingJoins = new Map<string, ((result: JoinResult) => void)[]>();
+
+  function settleJoins(incidentId: string, result: JoinResult): void {
+    const waiting = pendingJoins.get(incidentId) ?? [];
+    pendingJoins.delete(incidentId);
+    for (const resolve of waiting) resolve(result);
+  }
 
   function update(changes: Partial<SyncState>): void {
     state = { ...state, ...changes };
@@ -77,6 +90,12 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     const received = [...state.received, ...events.filter((e) => !known.has(e.eventId))];
     storage.setItem(keys.received, JSON.stringify(received));
     return received;
+  }
+
+  // The Coordinator always sends the whole Incident, so it replaces the one with the same id, or is added.
+  function replaceIncident(incident: Incident): Incident[] {
+    const known = state.incidents.some((i) => i.incidentId === incident.incidentId);
+    return known ? state.incidents.map((i) => (i.incidentId === incident.incidentId ? incident : i)) : [...state.incidents, incident];
   }
 
   // A new Coordinator epoch means the local data belongs to a Coordinator that no longer exists.
@@ -105,6 +124,13 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         return;
       case "snapshot":
         update({ incidents: message.incidents, received: storeReceived(message.events), snapshotReceived: true });
+        return;
+      case "incident":
+        update({ incidents: replaceIncident(message.incident), received: storeReceived(message.events) });
+        settleJoins(message.incident.incidentId, { ok: true });
+        return;
+      case "joinRejected":
+        settleJoins(message.incidentId, { ok: false, reason: message.reason });
         return;
       case "pong":
         awaitPong();
@@ -135,6 +161,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     clearInterval(pingTimer);
     clearTimeout(pongTimer);
     socket = undefined;
+    // A Join without a reply may still have been committed; the snapshot after reconnect shows it if so.
+    for (const incidentId of [...pendingJoins.keys()]) settleJoins(incidentId, { ok: false, reason: "offline" });
     update({ online: false, snapshotReceived: false });
     if (stopped) return;
     const delay = backoffMs[Math.min(attempt, backoffMs.length - 1)];
@@ -162,6 +190,13 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       stopped = true;
       clearTimeout(reconnectTimer);
       dropSocket();
+    },
+    join(incidentId) {
+      if (!state.online) return Promise.resolve({ ok: false, reason: "offline" });
+      return new Promise((resolve) => {
+        pendingJoins.set(incidentId, [...(pendingJoins.get(incidentId) ?? []), resolve]);
+        send({ type: "join", incidentId });
+      });
     },
     getState: () => state,
     subscribe(listener) {

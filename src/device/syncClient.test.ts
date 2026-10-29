@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { startCoordinator, type Coordinator } from "../coordinator/coordinator.ts";
+import type { Incident } from "../shared/incident.ts";
 import { deviceSocketPath } from "../shared/protocol.ts";
 import { createSyncClient, type KeyValueStore, type SyncClient, type SyncState } from "./syncClient.ts";
 import { memoryStorage } from "./memoryStorage.ts";
@@ -175,5 +176,167 @@ describe("Device sync", () => {
     expect(state.received).toEqual([]);
     expect(storage.getItem("opr:device-1:epoch")).toBe(c.epoch);
     expect(c.listDevices()).toEqual([{ deviceId: "device-1", resourceId: "alpha-1", offset: 0 }]);
+  });
+});
+
+async function postIncident(c: Coordinator, body: unknown): Promise<Incident> {
+  const response = await fetch(`http://localhost:${c.port}/api/incidents`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return ((await response.json()) as { incident: Incident }).incident;
+}
+
+describe("Incidents on a Device", () => {
+  it("gets a snapshot with the Incidents of its Resource, their legs and events, and no other", async () => {
+    const c = await coordinator();
+    const mine = await postIncident(c, { resourceId: "alpha-1", name: "Kari Nordmann", triage: "red" });
+    await postIncident(c, { resourceId: "bravo-2", name: "Ola Nordmann" });
+
+    const state = await waitFor(client(c), (s) => s.snapshotReceived);
+
+    expect(state.incidents).toEqual([mine]);
+    expect(state.received.map((e) => [e.incidentId, e.kind, e.source.type])).toEqual([
+      [mine.incidentId, "fieldSet", "eoc"],
+      [mine.incidentId, "fieldSet", "eoc"],
+    ]);
+  });
+
+  it("gets an Incident the EOC creates for its Resource while it is connected, with its events", async () => {
+    const c = await coordinator();
+    const device = client(c);
+    const other = client(c, { deviceId: "device-2", resourceId: "bravo-2" });
+    await waitFor(device, (s) => s.snapshotReceived);
+    await waitFor(other, (s) => s.snapshotReceived);
+
+    const created = await postIncident(c, { resourceId: "alpha-1", name: "Kari Nordmann" });
+    const state = await waitFor(device, (s) => s.incidents.length === 1);
+
+    expect(state.incidents).toEqual([created]);
+    expect(state.received).toEqual([expect.objectContaining({ incidentId: created.incidentId, field: "name", value: "Kari Nordmann" })]);
+    expect(other.getState().incidents).toEqual([]);
+  });
+});
+
+// A raw Device socket that hands out its messages one at a time, in arrival order.
+function openDeviceSocket(c: Coordinator): { next(): Promise<unknown>; send(message: unknown): void; closed(): boolean } {
+  const socket = new WebSocket(socketUrl(c));
+  const received: unknown[] = [];
+  let notify = () => {};
+  socket.addEventListener("message", (e) => {
+    received.push(JSON.parse(String(e.data)));
+    notify();
+  });
+  const opened = new Promise((resolve) => socket.addEventListener("open", resolve));
+  return {
+    async next() {
+      while (received.length === 0) await new Promise<void>((resolve) => (notify = resolve));
+      return received.shift();
+    },
+    send: (message) => void opened.then(() => socket.send(JSON.stringify(message))),
+    closed: () => socket.readyState !== WebSocket.OPEN,
+  };
+}
+
+describe("Join", () => {
+  it("opens an Active leg for the Resource and gives the joiner the full history", async () => {
+    const c = await coordinator();
+    const created = await postIncident(c, { resourceId: "alpha-1", name: "Kari Nordmann", triage: "orange" });
+    const joiner = client(c, { deviceId: "device-2", resourceId: "bravo-2" });
+    await waitFor(joiner, (s) => s.online && s.snapshotReceived);
+
+    const result = await joiner.join(created.incidentId);
+
+    expect(result).toEqual({ ok: true });
+    const [incident] = joiner.getState().incidents;
+    expect(incident?.incidentId).toBe(created.incidentId);
+    expect(incident?.closed).toBe(false);
+    expect(incident?.legs.map((l) => [l.resourceId, l.completedAt])).toEqual([
+      ["alpha-1", null],
+      ["bravo-2", null],
+    ]);
+    expect(joiner.getState().received.map((e) => [e.kind, e.source.type])).toEqual([
+      ["fieldSet", "eoc"],
+      ["fieldSet", "eoc"],
+    ]);
+  });
+
+  it("shows the new leg on a Device of a Resource that already works on the Incident", async () => {
+    const c = await coordinator();
+    const created = await postIncident(c, { resourceId: "alpha-1" });
+    const earlier = client(c);
+    const bystander = client(c, { deviceId: "device-3", resourceId: "charlie-3" });
+    const joiner = client(c, { deviceId: "device-2", resourceId: "bravo-2" });
+    await waitFor(earlier, (s) => s.snapshotReceived);
+    await waitFor(bystander, (s) => s.snapshotReceived);
+    await waitFor(joiner, (s) => s.online && s.snapshotReceived);
+
+    await joiner.join(created.incidentId);
+    const state = await waitFor(earlier, (s) => s.incidents[0]?.legs.length === 2);
+
+    expect(state.incidents[0]?.legs.map((l) => l.resourceId)).toEqual(["alpha-1", "bravo-2"]);
+    expect(bystander.getState().incidents).toEqual([]);
+  });
+
+  it("lets a Resource Join an Incident again while it holds an Active leg there", async () => {
+    const c = await coordinator();
+    const created = await postIncident(c, { resourceId: "alpha-1" });
+    const device = client(c);
+    await waitFor(device, (s) => s.online && s.snapshotReceived);
+
+    expect(await device.join(created.incidentId)).toEqual({ ok: true });
+
+    expect(device.getState().incidents[0]?.legs.map((l) => [l.resourceId, l.completedAt])).toEqual([
+      ["alpha-1", null],
+      ["alpha-1", null],
+    ]);
+  });
+
+  it("answers an unknown Incident id with joinRejected and keeps the socket open", async () => {
+    const c = await coordinator();
+    const device = openDeviceSocket(c);
+    device.send({ type: "hello", deviceId: "device-1", resourceId: "alpha-1", epoch: null });
+    expect(await device.next()).toMatchObject({ type: "welcome" });
+    expect(await device.next()).toMatchObject({ type: "snapshot" });
+
+    device.send({ type: "join", incidentId: "INC-9999" });
+
+    expect(await device.next()).toEqual({ type: "joinRejected", incidentId: "INC-9999", reason: "unknown" });
+    device.send({ type: "ping" });
+    expect(await device.next()).toEqual({ type: "pong" });
+    expect(device.closed()).toBe(false);
+  });
+
+  it("reports an unknown Incident id to the caller", async () => {
+    const c = await coordinator();
+    const device = client(c);
+    await waitFor(device, (s) => s.online && s.snapshotReceived);
+
+    expect(await device.join("INC-9999")).toEqual({ ok: false, reason: "unknown" });
+    expect(device.getState().online).toBe(true);
+  });
+
+  it("fails at once with offline and sends nothing when the Device is not online", async () => {
+    const c = await coordinator();
+    const created = await postIncident(c, { resourceId: "bravo-2" });
+    const device = client(c);
+
+    expect(device.getState().online).toBe(false);
+    expect(await device.join(created.incidentId)).toEqual({ ok: false, reason: "offline" });
+
+    const state = await waitFor(device, (s) => s.online && s.snapshotReceived);
+    expect(state.incidents).toEqual([]);
+  });
+
+  it("fails with offline when the socket closes before a reply", async () => {
+    const c = await coordinator();
+    const device = client(c);
+    await waitFor(device, (s) => s.online && s.snapshotReceived);
+
+    const result = device.join("INC-0001");
+    device.stop();
+
+    expect(await result).toEqual({ ok: false, reason: "offline" });
   });
 });

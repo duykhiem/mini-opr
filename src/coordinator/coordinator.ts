@@ -53,9 +53,13 @@ export async function startCoordinator(options: { dbPath: string; port: number }
   const watch = createWatchChannel(snapshot);
 
   // After a Reset the closing Devices have no row left, so their close is not reported.
-  const devices = createDeviceChannel(db, (deviceId) => {
-    const device = readDevice(db, deviceId);
-    if (device) watch.broadcast({ type: "device", ...statusOf(device) });
+  // ADR 0008: after a Join, the whole Incident with its new leg.
+  const devices = createDeviceChannel(db, {
+    onConnectedChange: (deviceId) => {
+      const device = readDevice(db, deviceId);
+      if (device) watch.broadcast({ type: "device", ...statusOf(device) });
+    },
+    onJoin: (incident) => watch.broadcast({ type: "incident", incident }),
   });
 
   const server = createServer((req, res) => {
@@ -78,6 +82,8 @@ export async function startCoordinator(options: { dbPath: string; port: number }
             // ADR 0008: the Incident first, then its EOC events.
             watch.broadcast({ type: "incident", incident });
             if (events.length > 0) watch.broadcast({ type: "events", events });
+            // The EOC events are the whole history of a new Incident.
+            devices.sendIncident(incident, events.map((e) => e.event));
           },
           () => sendJson(res, 400, { error: "body is not JSON" }),
         )

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { createSyncClient, type SyncState } from "../device/syncClient.ts";
+import { createSyncClient, type SyncClient, type SyncState } from "../device/syncClient.ts";
 import { deviceKey } from "../shared/device.ts";
 import { deviceSocketPath } from "../shared/protocol.ts";
 
@@ -19,7 +19,7 @@ function socketUrl(): string {
 }
 
 // Runs the Device sync client while this tab is the Device of the Resource.
-export function useSyncClient(resourceId: string): SyncState {
+export function useSyncClient(resourceId: string): { state: SyncState; join: SyncClient["join"] } {
   const client = useMemo(
     () =>
       createSyncClient({
@@ -37,5 +37,5 @@ export function useSyncClient(resourceId: string): SyncState {
     return () => client.stop();
   }, [client]);
 
-  return useSyncExternalStore(client.subscribe, client.getState);
+  return { state: useSyncExternalStore(client.subscribe, client.getState), join: client.join };
 }

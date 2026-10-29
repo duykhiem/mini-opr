@@ -207,6 +207,11 @@ export function registerDevice(db: DatabaseSync, deviceId: string, resourceId: s
   return row.offset;
 }
 
+function eventsOf(db: DatabaseSync, incidentId: string): Event[] {
+  const rows = db.prepare("SELECT body FROM events WHERE incidentId = ? ORDER BY rowid").all(incidentId) as { body: string }[];
+  return rows.map((row) => JSON.parse(row.body) as Event);
+}
+
 // Every Incident the Resource has a leg in, with its legs and all its events.
 export function snapshotFor(db: DatabaseSync, resourceId: string): { incidents: Incident[]; events: Event[] } {
   const rows = db
@@ -216,12 +221,30 @@ export function snapshotFor(db: DatabaseSync, resourceId: string): { incidents: 
        ORDER BY createdAt, incidentId`,
     )
     .all(resourceId) as { incidentId: string }[];
-  const eventsOf = db.prepare("SELECT body FROM events WHERE incidentId = ? ORDER BY rowid");
 
   return {
     incidents: rows.map((row) => readIncident(db, row.incidentId)),
-    events: rows.flatMap((row) =>
-      (eventsOf.all(row.incidentId) as { body: string }[]).map((r) => JSON.parse(r.body) as Event),
-    ),
+    events: rows.flatMap((row) => eventsOf(db, row.incidentId)),
   };
+}
+
+// A Join: one transaction that inserts an Active Transfer leg for the Resource (ADR 0006). A Resource may Join
+// the same Incident any number of times, even while it holds an Active leg there.
+// Returns the Incident with its full event history, or null when the Incident does not exist.
+export function joinIncident(
+  db: DatabaseSync,
+  incidentId: string,
+  resourceId: string,
+  now: number,
+): { incident: Incident; events: Event[] } | null {
+  return transaction(db, () => {
+    if (db.prepare("SELECT 1 FROM incidents WHERE incidentId = ?").get(incidentId) === undefined) return null;
+    db.prepare("INSERT INTO transfer_legs (legId, incidentId, resourceId, createdAt) VALUES (?, ?, ?, ?)").run(
+      randomUUID(),
+      incidentId,
+      resourceId,
+      now,
+    );
+    return { incident: readIncident(db, incidentId), events: eventsOf(db, incidentId) };
+  });
 }

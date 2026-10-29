@@ -252,6 +252,32 @@ describe("The /watch socket", () => {
     expect(b).toBeLessThan(c!);
   });
 
+  it("sends the whole Incident with its new leg after a Join", async () => {
+    const coordinator = await start(":memory:");
+    const created = await postIncident(coordinator, { resourceId: "alpha-1" });
+    const { incident } = (await created.json()) as { incident: Incident };
+    const watch = openWatchSocket(coordinator);
+    expect(await watch.next()).toMatchObject({ type: "snapshot", incidents: [incident] });
+
+    const device = new WebSocket(`ws://localhost:${coordinator.port}${deviceSocketPath}`);
+    device.addEventListener("open", () => {
+      device.send(JSON.stringify({ type: "hello", deviceId: "device-2", resourceId: "bravo-2", epoch: null }));
+      device.send(JSON.stringify({ type: "join", incidentId: incident.incidentId }));
+    });
+
+    // The hello is reported first (ADR 0008).
+    expect(await watch.next()).toMatchObject({ type: "device", deviceId: "device-2", connected: true });
+    const message = await watch.next();
+    expect(message).toEqual({
+      type: "incident",
+      incident: {
+        ...incident,
+        legs: [incident.legs[0], { legId: expect.any(String), resourceId: "bravo-2", createdAt: expect.any(Number), completedAt: null }],
+      },
+    });
+    device.close();
+  });
+
   it("answers a ping with a pong", async () => {
     const coordinator = await start(":memory:");
     const watch = openWatchSocket(coordinator);

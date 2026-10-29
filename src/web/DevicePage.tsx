@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
+import type { JoinResult } from "../device/syncClient.ts";
 import type { Event, Vitals } from "../shared/event.ts";
 import { isActive, type Incident } from "../shared/incident.ts";
 import { applyEvent, compareStamps, emptyPatient } from "../shared/patient.ts";
@@ -60,7 +61,7 @@ function ResourcePicker(props: { resources: Resource[]; resourceId: string | nul
 
 function Device(props: { resourceId: string; resourceName: (id: string) => string; picker: ReactNode }) {
   const { resourceId, resourceName } = props;
-  const state = useSyncClient(resourceId);
+  const { state, join } = useSyncClient(resourceId);
   const [incidentId, setIncidentId] = useState<string | null>(null);
   const incident = state.incidents.find((i) => i.incidentId === incidentId);
 
@@ -70,6 +71,7 @@ function Device(props: { resourceId: string; resourceName: (id: string) => strin
         {props.picker}
         <span> {state.online ? "online" : "offline"}</span>
         {state.error && <span role="alert"> sync error: {state.error}</span>}
+        <JoinField join={join} onJoined={setIncidentId} />
       </header>
       <section>
         <h2>Incidents</h2>
@@ -93,6 +95,54 @@ function Device(props: { resourceId: string; resourceName: (id: string) => strin
       )}
     </>
   );
+}
+
+// Join by a pasted Incident id (Handover, no accept step). A failure shows its reason under the field.
+function JoinField(props: { join: (incidentId: string) => Promise<JoinResult>; onJoined: (incidentId: string) => void }) {
+  const [value, setValue] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string>();
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    const incidentId = value.trim();
+    if (incidentId === "") return;
+    setPending(true);
+    setError(undefined);
+    const result = await props.join(incidentId);
+    setPending(false);
+    if (result.ok) {
+      setValue("");
+      props.onJoined(incidentId);
+    } else {
+      setError(joinFailure(result.reason, incidentId));
+    }
+  }
+
+  return (
+    <form onSubmit={submit}>
+      <label>
+        Join Incident <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="INC-0001" />
+      </label>
+      <button type="submit" disabled={pending || value.trim() === ""}>
+        {pending ? "Joining..." : "Join"}
+      </button>
+      {error && (
+        <p role="alert" className="alert">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+function joinFailure(reason: Exclude<JoinResult, { ok: true }>["reason"], incidentId: string): string {
+  switch (reason) {
+    case "offline":
+      return "Offline: Join needs the network. Try again when the Device is online.";
+    case "unknown":
+      return `Unknown Incident id ${incidentId}.`;
+  }
 }
 
 function IncidentView(props: { incident: Incident; events: Event[]; resourceName: (id: string) => string }) {
