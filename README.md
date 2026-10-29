@@ -6,6 +6,19 @@ It is a demo of how a One Patient Record (OPR) should behave. It is not a produc
 
 > **Status:** the online-only design is still being decided on the map [Mini OPR online: spec](https://github.com/duykhiem/mini-opr/issues/1). The glossary lives in [CONTEXT.md](CONTEXT.md); technical decisions live in [docs/adr/](docs/adr/).
 
+## Running
+
+Needs Node 24.15.0 or later.
+
+```sh
+npm install
+npm run dev        # Vite on http://localhost:5173 and the Coordinator on port 3001
+npm run typecheck
+npm test
+```
+
+The Coordinator stores its data in `mini-opr.sqlite` in the working directory; set `MINI_OPR_DB` and `MINI_OPR_PORT` to change the file or port. Nothing is deployed.
+
 ## Pages
 
 The demo is manual. A start page links to the EOC page, one Device tab for each of the three Resources, and the Coordinator page; each opens in its own tab.
@@ -38,7 +51,6 @@ There are no conflict marks and no settle entries.
 Not yet specified:
 
 - Seed data, and what Reset clears.
-- Running it: one command to start the frontend and the Coordinator; whether it is deployed anywhere.
 - Build order.
 
 ## Out of scope

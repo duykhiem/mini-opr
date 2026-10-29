@@ -18,7 +18,8 @@ GitHub Actions on every pull request and on push to `main`: Node 24.15.0 or newe
 
 - The Device sync client takes its storage and its WebSocket from the caller, so the same code runs in the browser and in tests.
 - The Coordinator takes its database path and port from the caller, so a test can start it on `:memory:` and port 0.
-- Not verified: that Vitest resolves `node:sqlite` as a built-in. Check it in the first build ticket; fall back to running the Coordinator tests with `node:test` if it does not.
+- One exception to `:memory:`: the test that a plain restart keeps the Coordinator epoch needs a database that outlives the Coordinator, so it uses a temporary SQLite file and removes it afterwards.
+- Vitest resolves `node:sqlite` as a built-in (checked with Vitest 5 on Node 24), so the Coordinator tests run on Vitest too.
 
 ## Considered options
 
