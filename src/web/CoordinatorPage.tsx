@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { Event, Vitals } from "../shared/event.ts";
 import type { Resource } from "../shared/resource.ts";
 import type { DeviceStatus, StoredEvent, WatchSnapshot } from "../shared/watch.ts";
@@ -39,6 +39,17 @@ function summarize(event: Event): string {
 
 const formatTime = (ms: number) => new Date(ms).toLocaleTimeString();
 
+// Reset is called only from this page, behind a confirm dialog that closes on the 200 (ADR 0008).
+async function postReset(): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch("/api/reset", { method: "POST" });
+  } catch {
+    throw new Error("Could not reach the Coordinator.");
+  }
+  if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+}
+
 export function CoordinatorPage() {
   // Replaced by the /watch client in #21.
   const state = sampleCoordinatorState;
@@ -53,6 +64,7 @@ export function CoordinatorPage() {
         <span className="epoch">
           Epoch <code>{state.epoch}</code>
         </span>
+        <ResetButton />
       </header>
       {error && (
         <p role="alert" className="alert">
@@ -75,6 +87,58 @@ export function CoordinatorPage() {
         )}
       </div>
     </main>
+  );
+}
+
+function ResetButton() {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string>();
+
+  function open() {
+    setError(undefined);
+    dialog.current?.showModal();
+  }
+
+  async function confirm() {
+    setPending(true);
+    setError(undefined);
+    try {
+      await postReset();
+      dialog.current?.close();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <>
+      <button type="button" className="button-danger" onClick={open}>
+        Reset
+      </button>
+      <dialog ref={dialog} className="card dialog">
+        <h2>Reset the demo?</h2>
+        <p>
+          The Coordinator deletes every Incident, Patient, Event and Device Offset and starts a new Coordinator epoch. Each
+          Device clears itself when it reconnects. Resources are kept.
+        </p>
+        {error && (
+          <p role="alert" className="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button type="button" className="button-small" onClick={() => dialog.current?.close()} disabled={pending}>
+            Cancel
+          </button>
+          <button type="button" className="button-danger" onClick={() => void confirm()} disabled={pending}>
+            {pending ? "Resetting..." : "Reset"}
+          </button>
+        </div>
+      </dialog>
+    </>
   );
 }
 

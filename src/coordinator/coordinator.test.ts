@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Incident } from "../shared/incident.ts";
+import { deviceSocketPath } from "../shared/protocol.ts";
 import type { WatchMessage } from "../shared/watch.ts";
 import { startCoordinator, type Coordinator } from "./coordinator.ts";
 
@@ -35,11 +36,13 @@ describe("Coordinator", () => {
   });
 
   // A restart needs a file; :memory: does not survive close (ADR 0007).
-  it("keeps its Coordinator epoch across a plain restart", async () => {
+  it("keeps its Coordinator epoch and its data across a plain restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "mini-opr-"));
     try {
       const dbPath = join(dir, "coordinator.sqlite");
       const first = await start(dbPath);
+      const created = await postIncident(first, { resourceId: "alpha-1", name: "Kari Nordmann" });
+      const { incident } = (await created.json()) as { incident: Incident };
       const epoch = first.epoch;
       await first.close();
 
@@ -47,6 +50,9 @@ describe("Coordinator", () => {
 
       expect(epoch).not.toBe("");
       expect(second.epoch).toBe(epoch);
+      const snapshot = await openWatchSocket(second).next();
+      expect(snapshot).toMatchObject({ type: "snapshot", epoch, incidents: [incident] });
+      expect((snapshot as Extract<WatchMessage, { type: "snapshot" }>).events).toHaveLength(1);
       expect((await start(":memory:")).epoch).not.toBe(epoch);
     } finally {
       await closeAll();
@@ -192,5 +198,55 @@ describe("The /watch socket", () => {
     watch.send({ type: "ping" });
 
     expect(await watch.next()).toEqual({ type: "pong" });
+  });
+});
+
+function postReset(coordinator: Coordinator): Promise<Response> {
+  return fetch(`http://localhost:${coordinator.port}/api/reset`, { method: "POST" });
+}
+
+describe("Reset", () => {
+  it("returns 200 and sends an empty snapshot with a new epoch on an open /watch socket", async () => {
+    const coordinator = await start(":memory:");
+    await postIncident(coordinator, { resourceId: "alpha-1", name: "Kari Nordmann" });
+    const watch = openWatchSocket(coordinator);
+    const before = await watch.next();
+    expect(before).toMatchObject({ type: "snapshot", incidents: [expect.anything()] });
+    const oldEpoch = coordinator.epoch;
+
+    const response = await postReset(coordinator);
+
+    expect(response.status).toBe(200);
+    const after = await watch.next();
+    expect(after).toEqual({ type: "snapshot", epoch: coordinator.epoch, incidents: [], events: [], devices: [] });
+    expect(coordinator.epoch).not.toBe(oldEpoch);
+    // The socket stays open: it still answers a ping.
+    watch.send({ type: "ping" });
+    expect(await watch.next()).toEqual({ type: "pong" });
+  });
+
+  it("keeps only the Resources: Incidents, Events and Devices are gone and ids start over", async () => {
+    const coordinator = await start(":memory:");
+    await postIncident(coordinator, { resourceId: "alpha-1", name: "Kari Nordmann" });
+    await postIncident(coordinator, { resourceId: "bravo-2", triage: "red" });
+    const device = new WebSocket(`ws://localhost:${coordinator.port}${deviceSocketPath}`);
+    device.addEventListener("open", () => device.send(JSON.stringify({ type: "hello", deviceId: "device-1", resourceId: "alpha-1", epoch: null })));
+    await new Promise((resolve) => device.addEventListener("message", resolve, { once: true }));
+    expect(coordinator.listDevices()).toHaveLength(1);
+
+    await postReset(coordinator);
+
+    expect(coordinator.listDevices()).toEqual([]);
+    expect(await openWatchSocket(coordinator).next()).toEqual({
+      type: "snapshot",
+      epoch: coordinator.epoch,
+      incidents: [],
+      events: [],
+      devices: [],
+    });
+    const resources = await fetch(`http://localhost:${coordinator.port}/api/resources`);
+    expect(((await resources.json()) as { resourceId: string }[]).map((r) => r.resourceId)).toEqual(["alpha-1", "bravo-2", "charlie-3"]);
+    const created = await postIncident(coordinator, { resourceId: "charlie-3" });
+    expect(((await created.json()) as { incident: Incident }).incident.incidentId).toBe("INC-0001");
   });
 });

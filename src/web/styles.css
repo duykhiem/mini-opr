@@ -225,6 +225,46 @@ button {
   color: var(--text);
 }
 
+.button-danger {
+  padding: 8px 14px;
+  font-weight: 600;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+}
+
+.button-danger:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* Confirm dialog */
+
+.dialog {
+  max-width: 420px;
+  color: var(--text);
+}
+
+.dialog::backdrop {
+  background: #0006;
+}
+
+.dialog h2 {
+  margin-top: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.dialog-actions .button-small {
+  padding: 8px 14px;
+  font-size: inherit;
+}
+
 .alert {
   margin: 0;
   padding: 8px 10px;

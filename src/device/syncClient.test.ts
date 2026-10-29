@@ -149,4 +149,31 @@ describe("Device sync", () => {
 
     expect(state.epoch).toBe(c.epoch);
   });
+
+  it("is disconnected by a Reset, reconnects, clears itself and gets the new epoch with Offset 0", async () => {
+    const c = await coordinator();
+    await fetch(`http://localhost:${c.port}/api/incidents`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resourceId: "alpha-1", name: "Kari Nordmann" }),
+    });
+    const storage = memoryStorage();
+    const device = client(c, { storage });
+    const before = await waitFor(device, (s) => s.online && s.snapshotReceived);
+    expect(before.incidents).toHaveLength(1);
+    expect(before.received).toHaveLength(1);
+    const oldEpoch = before.epoch;
+
+    const response = await fetch(`http://localhost:${c.port}/api/reset`, { method: "POST" });
+    expect(response.status).toBe(200);
+    await waitFor(device, (s) => !s.online);
+    const state = await waitFor(device, (s) => s.online && s.snapshotReceived && s.epoch !== oldEpoch);
+
+    expect(state.epoch).toBe(c.epoch);
+    expect(state.offset).toBe(0);
+    expect(state.incidents).toEqual([]);
+    expect(state.received).toEqual([]);
+    expect(storage.getItem("opr:device-1:epoch")).toBe(c.epoch);
+    expect(c.listDevices()).toEqual([{ deviceId: "device-1", resourceId: "alpha-1", offset: 0 }]);
+  });
 });

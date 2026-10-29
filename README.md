@@ -50,7 +50,7 @@ There are no conflict marks and no settle entries.
 
 Not yet specified:
 
-- Seed data, and what Reset clears.
+- Seed data.
 - Build order.
 
 ## Out of scope

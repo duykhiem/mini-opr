@@ -89,6 +89,18 @@ export function readEpoch(db: DatabaseSync): string {
   return row.value;
 }
 
+// Starts the demo over: drops everything but resources and writes a new Coordinator epoch, in one transaction.
+// devices goes too: a Device restarts seq at 1, so an old Offset would skip its new events.
+// Returns the new epoch.
+export function resetDatabase(db: DatabaseSync): string {
+  const epoch = randomUUID();
+  transaction(db, () => {
+    for (const table of ["events", "patients", "transfer_legs", "incidents", "devices"]) db.exec(`DELETE FROM ${table}`);
+    db.prepare("UPDATE meta SET value = ? WHERE key = 'epoch'").run(epoch);
+  });
+  return epoch;
+}
+
 export function listResources(db: DatabaseSync): Resource[] {
   return db.prepare("SELECT resourceId, name FROM resources ORDER BY resourceId").all() as Resource[];
 }

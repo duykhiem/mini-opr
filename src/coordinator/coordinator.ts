@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { deviceSocketPath } from "../shared/protocol.ts";
 import type { DeviceStatus } from "../shared/watch.ts";
-import { createIncident, listDevices, listEvents, listIncidents, listResources, openDatabase, readEpoch } from "./db.ts";
+import { createIncident, listDevices, listEvents, listIncidents, listResources, openDatabase, readEpoch, resetDatabase } from "./db.ts";
 import { createDeviceChannel } from "./deviceSocket.ts";
 import { parseNewIncident } from "./newIncident.ts";
 import { createWatchChannel } from "./watch.ts";
@@ -30,13 +30,16 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 // The caller picks the database path and port, so a test can use ":memory:" and port 0.
 export async function startCoordinator(options: { dbPath: string; port: number }): Promise<Coordinator> {
   const db = openDatabase(options.dbPath);
+  // Changed only by Reset; kept here so the handle can still read it after close.
+  let epoch = readEpoch(db);
   // Connectivity is not tracked yet, so every Device shows disconnected.
-  const watch = createWatchChannel(() => ({
-    epoch: readEpoch(db),
+  const snapshot = () => ({
+    epoch,
     incidents: listIncidents(db),
     events: listEvents(db),
     devices: listDevices(db).map((device) => ({ ...device, connected: false })),
-  }));
+  });
+  const watch = createWatchChannel(snapshot);
 
   const devices = createDeviceChannel(db);
 
@@ -69,6 +72,21 @@ export async function startCoordinator(options: { dbPath: string; port: number }
         });
       return;
     }
+    if (req.method === "POST" && path === "/api/reset") {
+      try {
+        epoch = resetDatabase(db);
+      } catch (error) {
+        console.error(error);
+        sendJson(res, 500, { error: "could not reset" });
+        return;
+      }
+      // Each Device reconnects, sees the new epoch and clears itself (ADR 0005).
+      devices.closeSockets();
+      res.writeHead(200).end();
+      // ADR 0008: open /watch sockets stay open and get the new, empty snapshot.
+      watch.broadcast({ type: "snapshot", ...snapshot() });
+      return;
+    }
     sendJson(res, 404, { error: "not found" });
   });
 
@@ -97,7 +115,9 @@ export async function startCoordinator(options: { dbPath: string; port: number }
 
   return {
     port: (server.address() as AddressInfo).port,
-    epoch: readEpoch(db),
+    get epoch() {
+      return epoch;
+    },
     listDevices: () => listDevices(db),
     closeDeviceSockets: () => devices.closeSockets(),
     close,
