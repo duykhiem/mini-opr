@@ -7,7 +7,7 @@ A demo of how one patient record travels with a patient across several ambulance
 ### Dispatch
 
 **EOC**:
-The emergency operations centre that creates Incidents and assigns their Transfer legs. It is not a Device and has no Event log.
+The emergency operations centre that creates Incidents and assigns their Transfer legs. It is not a Device and has no Event log; any Patient details it gives when creating an Incident are recorded as Events by the Coordinator.
 _Avoid_: Dispatcher, AMK, control room
 
 **Incident**:
@@ -41,6 +41,10 @@ _Avoid_: Crew, unit, ambulance, tablet
 **Device**:
 One browser tab that a Resource works in, with its own Event log.
 _Avoid_: Tablet, client, terminal
+
+**Event**:
+One recorded change to a Patient, or the completion of a Transfer leg, written by a Resource on a Device or by the Coordinator on behalf of the EOC.
+_Avoid_: Entry, message, change
 
 **Event log**:
 The ordered list of events written on one Device.

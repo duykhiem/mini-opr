@@ -1,106 +1,113 @@
 # Mini OPR
 
-Mini OPR is a single web page with three simulated tablets and one Coordinator. Three crews write into one shared patient record. You switch tablets offline and online, and watch every tablet reach the same record, with no lost entries and every conflict visible.
+Mini OPR is a demo of how one patient record travels with a Patient across several ambulance Transfer legs. Each leg is handled by a different Resource on its own Device, and every Device's Event log is gathered by one Coordinator.
 
 It is a demo of how a One Patient Record (OPR) should behave. It is not a product. It uses no existing product code, no real data and no real integrations.
 
-## Scope
+> **Status:** this README is being rewritten as an online-only spec. Open decisions are tracked on the map [Mini OPR online: spec](https://github.com/duykhiem/mini-opr/issues/1). The glossary lives in [CONTEXT.md](CONTEXT.md).
 
-The Coordinator and the network run as modules inside the page. There is no server, so the page deploys as a static site. The kernel and the Coordinator stay in separate modules, so a real server can come later.
+## Pages
 
-### In scope
+The demo is manual: open the EOC page, three Device tabs and the Coordinator page.
 
-| # | Feature | Done means |
-|---|---|---|
-| 1 | Three tablets side by side, each with its own event log | Each tablet shows its own log and its own view of the record |
-| 2 | An Online / Offline switch on each tablet | While offline, entries stay local, and a badge counts the pending events |
-| 3 | A Coordinator in the page | It stores events, removes duplicates by `eventId`, keeps an offset for each tablet, and sends each tablet what it has not seen |
-| 4 | One incident, one patient record | All three tablets are members. There are no routing rules beyond that. |
-| 5 | Three kinds of field | **Added** (vitals, notes): every entry is kept. **Timeline** (triage): the newest wins, with a "disagreement" mark. **Single value** (patient name): "in conflict" until a person settles it. |
-| 6 | Settle a conflict | A button writes an entry that names both conflicting entries in `seen`, and the mark goes away |
-| 7 | One scenario button: "Three crews offline" | It plays the story step by step: all tablets go offline, each writes, then each reconnects |
-| 8 | Kernel tests | `fold(events)` gives the same record for any order and with duplicates |
+- **EOC page.** Creates Incidents. Each Incident has one Patient and an ordered list of Transfer legs, all created up front (leg n goes to Resource n). The EOC is not a Device and has no Event log. When it creates an Incident, it may give the Patient's name, date of birth and triage.
+- **Device page.** One browser tab. It picks one of three seeded Resources, from a dropdown or the `?resource=` URL param. There is no auth. It lists the Transfer legs of its Resource.
+- **Coordinator page.** Shows the merged log and each Device's offset.
 
-### Out of scope
+A Reset exists.
 
-These are stretch goals, in priority order:
+## How it works
 
-1. A routing view that animates each event to the tablets.
-2. A second incident, and routing by membership.
-3. Patient links ("same patient as").
-4. Signatures over a person's own entries.
-5. An upcaster and version 1 events.
-6. A real Node server with WebSocket.
-7. A legacy hub, Docker, and persistence across reloads.
+- Online only. There is no manual offline switch and no scenario button.
+- Many Incidents can run at once.
+- Leg n+1 becomes the Active leg when Resource n completes leg n.
+- A Device first sees an Incident when its leg becomes active, then gets that Incident's new events in realtime.
+- After Handover, the previous Resource can still see and edit the Patient.
+- A Device keeps its Event log in local browser storage, writes every event locally first, and retries sending in the background. It shows an online / offline indicator, with no pending count.
+- The `events` table on the Coordinator is the source of truth for the Patient. The Patient table is a projection.
+
+## Patient fields
+
+| Field | Rule |
+| --- | --- |
+| Name, date of birth, triage | Last write wins, per field. The newest `enteredAt` wins; on a tie, the larger `eventId` wins. A field can be overwritten but not cleared. |
+| Vitals, notes | Append-only. Every entry is kept. |
+
+There are no conflict marks and no settle entries.
+
+## Event schema
+
+```ts
+type Triage = "red" | "orange" | "yellow" | "green" | "blue";
+
+type Vitals = {            // at least one present
+  pulse?: number;          // /min
+  systolic?: number;       // mmHg
+  diastolic?: number;      // mmHg
+  spo2?: number;           // %
+  respRate?: number;       // /min
+  temperature?: number;    // °C
+};
+
+type EventBase = {
+  eventId: string;         // UUIDv7
+  enteredAt: number;       // epoch ms
+  incidentId: string;
+  patientId: string;
+  source:
+    | { type: "device"; deviceId: string; resourceId: string; legId: string }
+    | { type: "eoc" };
+};
+
+type Event = EventBase & (
+  | { kind: "fieldSet"; field: "name"; value: string }
+  | { kind: "fieldSet"; field: "dob"; value: string }      // YYYY-MM-DD
+  | { kind: "fieldSet"; field: "triage"; value: Triage }
+  | { kind: "vitalAdded"; vitals: Vitals }
+  | { kind: "noteAdded"; text: string }                    // non-empty
+  | { kind: "legCompleted" }                               // device source only
+);
+```
+
+- A Device makes `eventId` and `enteredAt` (its own clock) itself, so it can write with no network.
+- `legId` is the Transfer leg the Resource writes under. After Handover, the previous Resource's events still carry its own, completed leg.
+- EOC events are written by the Coordinator when the Incident is created: one `fieldSet` per given field, with an `eventId` and `enteredAt` made on the Coordinator.
 
 ## Stack
 
-- Vite, TypeScript and React.
-- Vitest for the kernel tests.
-- No backend and no database. State lives in memory.
+- Frontend: Vite, TypeScript and React.
+- Coordinator: Node 24.15.0 or later, with TypeScript, in the same repo as the frontend and sharing its types.
+- Storage: SQLite through the built-in `node:sqlite`, with a hand-written transaction wrapper.
+- Transport: plain WebSocket. `ws` on the Coordinator; the browser `WebSocket` on the Device, with its own reconnect and an app-level ping.
 
-## Layout
+## Not yet decided
 
-```
-mini-opr/
-├── src/kernel/        types.ts, ids.ts, fold.ts, conflict.ts  (pure, tested)
-├── src/coordinator/   coordinator.ts, network.ts             (in memory, with an offline flag)
-├── src/ui/            Tablet.tsx, RecordView.tsx, EventLog.tsx, Scenario.tsx
-├── src/kernel/*.test.ts
-└── README.md
-```
+Open tickets on the map:
 
-## Data model
+- [Transfer leg lifecycle and Handover rules](https://github.com/duykhiem/mini-opr/issues/5)
+- [Device identity and local storage across tabs](https://github.com/duykhiem/mini-opr/issues/6)
+- [Sync protocol between Device and Coordinator](https://github.com/duykhiem/mini-opr/issues/7)
+- [Coordinator tables and event application](https://github.com/duykhiem/mini-opr/issues/8)
+- [Screen layout for EOC, Device and Coordinator pages](https://github.com/duykhiem/mini-opr/issues/9)
 
-The whole kernel works on one event type:
+Not yet specified:
 
-```ts
-type Event = {
-  eventId: string;          // UUIDv7, made on the tablet
-  origin: string;           // "A" | "B" | "C"
-  recordId: string;         // the patient record
-  author: string;           // crew name
-  enteredAt: number;        // tablet clock
-  seen: string[];           // eventIds this entry has seen
-  kind: "vital" | "note" | "triage" | "name" | "settle";
-  value: unknown;
-};
+- Testing strategy.
+- Seed data, and what Reset clears.
+- Running it: one command to start the frontend and the Coordinator; whether it is deployed anywhere.
+- Build order.
 
-fold(events: Event[]): PatientRecord   // pure, order-independent
-```
+## Out of scope
 
-## The rules
-
-- A tablet writes every entry to its own log first. The UI never waits for the network.
-- A tablet makes its own ids, so it works with no network.
-- Tablets never talk to each other. Every event goes through the Coordinator.
-- The Coordinator stores each `eventId` once, and sends a tablet only the events after its offset.
-- An added entry never conflicts.
-- For a timeline field, the newest `enteredAt` is the current value. Two different concurrent values show "disagreement".
-- For a single-value field, two concurrent values stay "in conflict" until a person settles them. The last write never wins by itself.
-- Every tablet shows the same record, whatever order the events arrive in.
-
-## Plan
-
-| Time | Work |
-|---|---|
-| 0:00 to 0:20 | Scaffold Vite, React and Vitest. Write the types. |
-| 0:20 to 1:00 | Kernel: `fold`, the three kinds of field, settle. Tests for any order and for duplicates. |
-| 1:00 to 1:30 | Coordinator: store, dedup, offsets. Network: a queue for each tablet, with an offline flag. |
-| 1:30 to 2:20 | UI: three tablets, entry forms, a record view with marks, an event log. |
-| 2:20 to 2:45 | The scenario button and a step mode. |
-| 2:45 to 3:00 | README screenshots, deploy. |
-
-## Working with Claude
-
-1. Keep this scope in `CLAUDE.md` as the contract, and tell Claude to stay in it.
-2. Ask for the kernel and its tests first. Start the UI only when the tests pass.
-3. Ask for one slice per prompt: kernel, then Coordinator, then UI, then scenario.
-4. At 2:15, stop new features, and finish the scenario and this README.
-
-## Done
-
-A person opens the page, plays "Three crews offline", and sees three tablets reach the same patient record after they reconnect. No entry is lost, and every conflict is visible.
+- Manual offline switch and the "Three crews offline" scenario button.
+- Pending event count on the offline indicator.
+- Conflict marks and settle entries.
+- Auth and login.
+- More than one Patient per Incident; patient links ("same patient as").
+- Signatures over a person's own entries.
+- Upcaster and versioned events.
+- Legacy hub and Docker.
+- An Event log for the EOC.
 
 ## Data
 
