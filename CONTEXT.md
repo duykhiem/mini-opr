@@ -39,8 +39,8 @@ _Avoid_: Crew, unit, ambulance, tablet
 ### Sync
 
 **Device**:
-One browser tab that a Resource works in, with its own Event log.
-_Avoid_: Tablet, client, terminal
+The tablet a Resource works on. In the demo it is one Resource in one browser, open in one tab at a time, with its own Event log.
+_Avoid_: Tablet, client, terminal, tab
 
 **Event**:
 One recorded change to a Patient, or the completion of a Transfer leg, written by a Resource on a Device or by the Coordinator on behalf of the EOC.
@@ -53,3 +53,7 @@ _Avoid_: Journal, history, outbox
 **Coordinator**:
 The single place where every Device's Event log is gathered.
 _Avoid_: Server, hub, backend
+
+**Coordinator epoch**:
+The identity of one lifetime of the Coordinator's data, from a Reset to the next. A Device that sees a new epoch knows its local data belongs to a Coordinator that no longer exists.
+_Avoid_: Generation, session, version
