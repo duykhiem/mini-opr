@@ -35,11 +35,6 @@ There are no conflict marks and no settle entries.
 
 ## Not yet decided
 
-Open tickets on the map:
-
-- [Screen layout for EOC, Device and Coordinator pages](https://github.com/duykhiem/mini-opr/issues/9)
-- [Channels for the EOC and Coordinator pages](https://github.com/duykhiem/mini-opr/issues/10)
-
 Not yet specified:
 
 - Seed data, and what Reset clears.
