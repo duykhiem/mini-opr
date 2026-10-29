@@ -171,7 +171,8 @@ code {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   padding: 8px 10px;
   font: inherit;
@@ -184,6 +185,7 @@ select {
 
 input:focus,
 select:focus,
+textarea:focus,
 button:focus-visible {
   outline: none;
   border-color: var(--accent);
@@ -551,4 +553,29 @@ tr.highlight td {
   font-size: 0.8rem;
   font-weight: 400;
   color: var(--text-muted);
+}
+
+/* Device composer */
+
+.composer fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.composer textarea {
+  resize: vertical;
+}
+
+.vitals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.field-error {
+  margin: 0;
+  font-weight: 400;
+  color: var(--danger);
 }

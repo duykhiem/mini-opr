@@ -7,7 +7,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 // An Event's kind and payload, without the envelope: what the Device page's form gives.
 export type EventBody = DistributiveOmit<Event, keyof EventBase>;
 
-type DeviceSource = Omit<Extract<EventSource, { type: "device" }>, "type">;
+export type DeviceSource = Omit<Extract<EventSource, { type: "device" }>, "type">;
 
 // Builds a Device Event and checks it with parseEvent, so a bad body (a blank note, say) comes back as a reason.
 export function draftEvent(
