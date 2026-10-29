@@ -1,0 +1,391 @@
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-muted: #f0f2f6;
+  --border: #dde2ea;
+  --text: #1b2330;
+  --text-muted: #5f6b7c;
+  --accent: #1f5fbf;
+  --accent-hover: #184d9c;
+  --accent-text: #ffffff;
+  --danger: #b42318;
+  --danger-bg: #fdecea;
+  --ok: #1d7a3e;
+  --highlight: #fff6cc;
+  --focus: #1f5fbf55;
+
+  --triage-red: #d32f2f;
+  --triage-orange: #e8710a;
+  --triage-yellow: #f2c200;
+  --triage-green: #2e7d32;
+  --triage-blue: #1565c0;
+
+  --radius: 8px;
+  --shadow: 0 1px 2px #1b23300f, 0 1px 3px #1b23301a;
+
+  color-scheme: light;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161d;
+    --surface: #1b212b;
+    --surface-muted: #232a36;
+    --border: #313a48;
+    --text: #e6e9ef;
+    --text-muted: #9aa5b5;
+    --accent: #5b9bff;
+    --accent-hover: #7aaeff;
+    --accent-text: #0d1420;
+    --danger: #ff8a80;
+    --danger-bg: #3a1f1f;
+    --ok: #5fd08a;
+    --highlight: #3d3714;
+    --focus: #5b9bff66;
+    --shadow: 0 1px 3px #0006;
+
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+h1,
+h2 {
+  margin: 0;
+  line-height: 1.2;
+}
+
+h1 {
+  font-size: 1.6rem;
+}
+
+h2 {
+  font-size: 1.1rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+/* Page header */
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+
+.status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status.live {
+  color: var(--ok);
+}
+
+/* Cards and layout */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.eoc-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .eoc-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Forms */
+
+.form {
+  display: grid;
+  gap: 14px;
+}
+
+.field {
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.field .optional {
+  font-weight: 400;
+}
+
+input,
+select {
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+input:focus,
+select:focus,
+button:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.button-primary {
+  padding: 10px 14px;
+  font-weight: 600;
+  color: var(--accent-text);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.button-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.button-primary:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.button-small {
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+}
+
+.button-small:hover {
+  color: var(--text);
+}
+
+.alert {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: 6px;
+}
+
+/* Incident table */
+
+.table-card {
+  padding: 0;
+  overflow-x: auto;
+  transition: opacity 0.2s;
+}
+
+.table-card.dimmed {
+  opacity: 0.5;
+}
+
+.table-card h2 {
+  padding: 16px 20px 12px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  padding: 10px 20px;
+  text-align: left;
+  vertical-align: top;
+  border-top: 1px solid var(--border);
+}
+
+th {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+}
+
+tr.highlight td {
+  background: var(--highlight);
+  animation: flash 1.2s ease-out;
+}
+
+@keyframes flash {
+  from {
+    background: var(--triage-yellow);
+  }
+}
+
+.incident-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.empty {
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* Badges */
+
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  white-space: nowrap;
+  color: #fff;
+}
+
+.triage-red {
+  background: var(--triage-red);
+}
+
+.triage-orange {
+  background: var(--triage-orange);
+}
+
+.triage-yellow {
+  background: var(--triage-yellow);
+  color: #1b2330;
+}
+
+.triage-green {
+  background: var(--triage-green);
+}
+
+.triage-blue {
+  background: var(--triage-blue);
+}
+
+.state-active {
+  color: var(--ok);
+  background: transparent;
+  border: 1px solid currentColor;
+}
+
+.state-closed {
+  color: var(--text-muted);
+  background: var(--surface-muted);
+}
+
+.legs {
+  display: grid;
+  gap: 4px;
+}
+
+.leg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* Start page */
+
+.link-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.link-list a {
+  display: block;
+  height: 100%;
+  padding: 16px 20px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.link-list a:hover {
+  border-color: var(--accent);
+}
+
+.link-list .hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}

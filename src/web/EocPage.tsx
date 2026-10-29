@@ -6,7 +6,6 @@ import { useResources } from "./useResources.ts";
 import { useWatch } from "./useWatch.ts";
 
 const emptyForm = { resourceId: "", name: "", dob: "", triage: "" };
-const cell = { padding: "0.25rem 0.75rem" };
 
 // Creates over HTTP; a failed create keeps the form and is not retried (ADR 0008).
 async function postIncident(form: typeof emptyForm): Promise<Incident> {
@@ -59,25 +58,29 @@ export function EocPage() {
 
   return (
     <main>
-      <h1>
-        EOC <small>{connected ? "live" : "disconnected"}</small>
-      </h1>
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(14rem, 18rem) 1fr", gap: "2rem", alignItems: "start" }}>
-        <form onSubmit={submit} style={{ display: "grid", gap: "0.75rem" }}>
+      <header className="page-header">
+        <h1>EOC</h1>
+        <span className={connected ? "status live" : "status"}>{connected ? "live" : "disconnected"}</span>
+      </header>
+      <div className="eoc-layout">
+        <form onSubmit={submit} className="card form">
           <h2>New Incident</h2>
-          <label>
-            Patient name
-            <br />
+          <label className="field">
+            <span>
+              Patient name <span className="optional">(optional)</span>
+            </span>
             <input value={form.name} onChange={set("name")} />
           </label>
-          <label>
-            Date of birth
-            <br />
+          <label className="field">
+            <span>
+              Date of birth <span className="optional">(optional)</span>
+            </span>
             <input type="date" value={form.dob} onChange={set("dob")} />
           </label>
-          <label>
-            Triage
-            <br />
+          <label className="field">
+            <span>
+              Triage <span className="optional">(optional)</span>
+            </span>
             <select value={form.triage} onChange={set("triage")}>
               <option value="">Not set</option>
               {triages.map((t) => (
@@ -87,9 +90,8 @@ export function EocPage() {
               ))}
             </select>
           </label>
-          <label>
+          <label className="field">
             Resource for the first Transfer leg
-            <br />
             <select required value={form.resourceId} onChange={set("resourceId")}>
               <option value="" disabled>
                 Choose a Resource
@@ -101,15 +103,39 @@ export function EocPage() {
               ))}
             </select>
           </label>
-          <button type="submit" disabled={pending}>
-            Create Incident
+          <button type="submit" className="button-primary" disabled={pending}>
+            {pending ? "Creating..." : "Create Incident"}
           </button>
-          {error && <p role="alert">{error}</p>}
-          {resourcesError && <p role="alert">{resourcesError}</p>}
+          {error && (
+            <p role="alert" className="alert">
+              {error}
+            </p>
+          )}
+          {resourcesError && (
+            <p role="alert" className="alert">
+              {resourcesError}
+            </p>
+          )}
         </form>
         <IncidentTable incidents={data?.incidents ?? []} resources={resources} dimmed={!connected} highlightId={createdId} />
       </div>
     </main>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <button type="button" className="button-small" onClick={() => void copy()}>
+      {copied ? "Copied" : "Copy"}
+    </button>
   );
 }
 
@@ -118,39 +144,59 @@ function IncidentTable(props: { incidents: Incident[]; resources: Resource[]; di
   const newestFirst = [...props.incidents].sort((a, b) => b.createdAt - a.createdAt);
 
   return (
-    <table style={{ opacity: props.dimmed ? 0.5 : 1, borderCollapse: "collapse" }}>
-      <thead>
-        <tr>
-          {["Incident", "Patient name", "Triage", "Transfer legs", "State", "Created"].map((h) => (
-            <th key={h} style={{ ...cell, textAlign: "left" }}>
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {newestFirst.map((incident) => (
-          <tr key={incident.incidentId} style={{ background: incident.incidentId === props.highlightId ? "#fff3b0" : undefined }}>
-            <td style={cell}>
-              <code>{incident.incidentId}</code>{" "}
-              <button type="button" onClick={() => void navigator.clipboard.writeText(incident.incidentId)}>
-                Copy
-              </button>
-            </td>
-            <td style={cell}>{incident.patient.name?.value ?? ""}</td>
-            <td style={cell}>{incident.patient.triage?.value ?? ""}</td>
-            <td style={cell}>
-              {incident.legs.map((leg) => (
-                <div key={leg.legId}>
-                  {resourceName(leg.resourceId)}: {leg.completedAt === null ? "Active" : "Completed"}
-                </div>
+    <section className={props.dimmed ? "card table-card dimmed" : "card table-card"}>
+      <h2>Incidents</h2>
+      {newestFirst.length === 0 ? (
+        <p className="empty">No Incidents yet.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              {["Incident", "Patient name", "Triage", "Transfer legs", "State", "Created"].map((h) => (
+                <th key={h}>{h}</th>
               ))}
-            </td>
-            <td style={cell}>{incident.closed ? "Closed" : "Active"}</td>
-            <td style={cell}>{new Date(incident.createdAt).toLocaleTimeString()}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+            </tr>
+          </thead>
+          <tbody>
+            {newestFirst.map((incident) => (
+              <tr key={incident.incidentId} className={incident.incidentId === props.highlightId ? "highlight" : undefined}>
+                <td>
+                  <span className="incident-id">
+                    <code>{incident.incidentId}</code>
+                    <CopyButton text={incident.incidentId} />
+                  </span>
+                </td>
+                <td>{incident.patient.name?.value ?? <span className="muted">Unknown</span>}</td>
+                <td>
+                  {incident.patient.triage ? (
+                    <span className={`badge triage-${incident.patient.triage.value}`}>{incident.patient.triage.value}</span>
+                  ) : (
+                    <span className="muted">Not set</span>
+                  )}
+                </td>
+                <td>
+                  <div className="legs">
+                    {incident.legs.map((leg) => (
+                      <span key={leg.legId} className="leg">
+                        {resourceName(leg.resourceId)}
+                        <span className={leg.completedAt === null ? "badge state-active" : "badge state-closed"}>
+                          {leg.completedAt === null ? "Active" : "Completed"}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td>
+                  <span className={incident.closed ? "badge state-closed" : "badge state-active"}>
+                    {incident.closed ? "Closed" : "Active"}
+                  </span>
+                </td>
+                <td>{new Date(incident.createdAt).toLocaleTimeString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }

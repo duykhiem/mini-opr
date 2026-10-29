@@ -6,22 +6,33 @@ export function StartPage() {
   return (
     <main>
       <h1>Mini OPR</h1>
-      <ul>
+      <ul className="link-list">
         <li>
-          <a href="/eoc" target="_blank" rel="noopener">EOC page</a>
+          <a href="/eoc" target="_blank" rel="noopener">
+            EOC page
+            <span className="hint">Create Incidents</span>
+          </a>
         </li>
         {resources.map((r) => (
           <li key={r.resourceId}>
             <a href={`/device?resource=${encodeURIComponent(r.resourceId)}`} target="_blank" rel="noopener">
               Device: {r.name}
+              <span className="hint">Work on a Transfer leg</span>
             </a>
           </li>
         ))}
         <li>
-          <a href="/coordinator" target="_blank" rel="noopener">Coordinator page</a>
+          <a href="/coordinator" target="_blank" rel="noopener">
+            Coordinator page
+            <span className="hint">Offsets, merged log and Reset</span>
+          </a>
         </li>
       </ul>
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <p role="alert" className="alert">
+          {error}
+        </p>
+      )}
     </main>
   );
 }
