@@ -47,8 +47,12 @@ One recorded change to a Patient, or the completion of a Transfer leg, written b
 _Avoid_: Entry, message, change
 
 **Event log**:
-The ordered list of events written on one Device.
+The numbered list of events written on one Device, in the order they were written. Events a Device receives from the Coordinator are not part of its Event log.
 _Avoid_: Journal, history, outbox
+
+**Offset**:
+How far into a Device's Event log the Coordinator has stored, without gaps.
+_Avoid_: Cursor, watermark, position
 
 **Coordinator**:
 The single place where every Device's Event log is gathered.
