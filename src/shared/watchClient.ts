@@ -25,6 +25,15 @@ function receive(data: WatchSnapshot | undefined, message: WatchMessage): WatchS
     }
     case "events":
       return data && { ...data, events: [...data.events, ...message.events] };
+    case "device": {
+      if (!data) return data;
+      const { type: _, ...device } = message;
+      const known = data.devices.some((d) => d.deviceId === device.deviceId);
+      const devices = known
+        ? data.devices.map((d) => (d.deviceId === device.deviceId ? device : d))
+        : [...data.devices, device];
+      return { ...data, devices };
+    }
     case "pong":
       return data;
   }

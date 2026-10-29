@@ -182,9 +182,18 @@ export function listEvents(db: DatabaseSync): StoredEvent[] {
   return rows.map(({ body, ...row }) => ({ ...row, event: JSON.parse(body) as Event }));
 }
 
-// Without connectivity, which only the Coordinator knows (ADR 0008).
-export function listDevices(db: DatabaseSync): Omit<DeviceStatus, "connected">[] {
-  return db.prepare('SELECT deviceId, resourceId, "offset" FROM devices ORDER BY deviceId').all() as Omit<DeviceStatus, "connected">[];
+// A row in devices: without connectivity, which only the Coordinator knows in memory (ADR 0008).
+export type StoredDevice = Omit<DeviceStatus, "connected">;
+
+export function listDevices(db: DatabaseSync): StoredDevice[] {
+  return db.prepare('SELECT deviceId, resourceId, "offset" FROM devices ORDER BY deviceId').all() as StoredDevice[];
+}
+
+// Undefined once the row is gone, as after a Reset.
+export function readDevice(db: DatabaseSync, deviceId: string): StoredDevice | undefined {
+  return db.prepare('SELECT deviceId, resourceId, "offset" FROM devices WHERE deviceId = ?').get(deviceId) as
+    | StoredDevice
+    | undefined;
 }
 
 export function resourceExists(db: DatabaseSync, resourceId: string): boolean {

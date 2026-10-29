@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { startCoordinator, type Coordinator } from "../coordinator/coordinator.ts";
 import type { Incident } from "./incident.ts";
+import { deviceSocketPath } from "./protocol.ts";
 import { openWatch, type WatchView } from "./watchClient.ts";
 
 const cleanups: (() => unknown)[] = [];
@@ -63,6 +64,22 @@ describe("The watch client", () => {
     const view = await client.until((v) => v.data?.events.length === 1);
     expect(view.data?.incidents).toEqual([incident]);
     expect(view.data?.events[0]?.event).toMatchObject({ kind: "fieldSet", field: "triage", value: "green" });
+  });
+
+  it("adds a Device when it connects and replaces its row when it disconnects", async () => {
+    const coordinator = await start();
+    const client = watch(coordinator);
+    await client.until((v) => v.data !== undefined);
+
+    const device = new WebSocket(`ws://localhost:${coordinator.port}${deviceSocketPath}`);
+    device.onopen = () => device.send(JSON.stringify({ type: "hello", deviceId: "device-1", resourceId: "alpha-1", epoch: null }));
+    const online = await client.until((v) => v.data?.devices.length === 1);
+    expect(online.data?.devices).toEqual([{ deviceId: "device-1", resourceId: "alpha-1", offset: 0, connected: true }]);
+
+    device.close();
+
+    const offline = await client.until((v) => v.data?.devices[0]?.connected === false);
+    expect(offline.data?.devices).toEqual([{ deviceId: "device-1", resourceId: "alpha-1", offset: 0, connected: false }]);
   });
 
   it("shows disconnected when the Coordinator goes away, then replaces everything with the next snapshot", async () => {

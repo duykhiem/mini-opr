@@ -2,11 +2,8 @@ import { useRef, useState, type ReactNode } from "react";
 import type { Event, Vitals } from "../shared/event.ts";
 import type { Resource } from "../shared/resource.ts";
 import type { DeviceStatus, StoredEvent, WatchSnapshot } from "../shared/watch.ts";
-import { sampleCoordinatorState } from "./sampleCoordinatorState.ts";
 import { useResources } from "./useResources.ts";
-
-// Everything the Coordinator page shows: the /watch snapshot plus whether the socket is live (ADR 0008).
-export type CoordinatorState = WatchSnapshot & { live: boolean };
+import { useWatch } from "./useWatch.ts";
 
 type View = "lanes" | "log";
 
@@ -50,9 +47,12 @@ async function postReset(): Promise<void> {
   if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
 }
 
+// Shown until the first snapshot arrives.
+const noData: Omit<WatchSnapshot, "epoch"> = { incidents: [], events: [], devices: [] };
+
 export function CoordinatorPage() {
-  // Replaced by the /watch client in #21.
-  const state = sampleCoordinatorState;
+  const { connected, data } = useWatch();
+  const state = { ...(data ?? noData), live: connected };
   const { resources, error } = useResources();
   const [view, setView] = useState<View>("lanes");
 
@@ -61,9 +61,11 @@ export function CoordinatorPage() {
       <header className="page-header">
         <h1>Coordinator</h1>
         <span className={state.live ? "status live" : "status"}>{state.live ? "live" : "disconnected"}</span>
-        <span className="epoch">
-          Epoch <code>{state.epoch}</code>
-        </span>
+        {data && (
+          <span className="epoch">
+            Epoch <code>{data.epoch}</code>
+          </span>
+        )}
         <ResetButton />
       </header>
       {error && (

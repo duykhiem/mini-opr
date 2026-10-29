@@ -22,4 +22,5 @@ export type WatchMessage =
   | ({ type: "snapshot" } & WatchSnapshot)
   | { type: "events"; events: StoredEvent[] }
   | { type: "incident"; incident: Incident }
+  | ({ type: "device" } & DeviceStatus)
   | { type: "pong" };

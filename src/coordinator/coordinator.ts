@@ -2,7 +2,18 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { deviceSocketPath } from "../shared/protocol.ts";
 import type { DeviceStatus } from "../shared/watch.ts";
-import { createIncident, listDevices, listEvents, listIncidents, listResources, openDatabase, readEpoch, resetDatabase } from "./db.ts";
+import {
+  createIncident,
+  listDevices,
+  listEvents,
+  listIncidents,
+  listResources,
+  openDatabase,
+  readDevice,
+  readEpoch,
+  resetDatabase,
+  type StoredDevice,
+} from "./db.ts";
 import { createDeviceChannel } from "./deviceSocket.ts";
 import { parseNewIncident } from "./newIncident.ts";
 import { createWatchChannel } from "./watch.ts";
@@ -10,7 +21,7 @@ import { createWatchChannel } from "./watch.ts";
 export type Coordinator = {
   port: number;
   epoch: string;
-  listDevices(): Omit<DeviceStatus, "connected">[];
+  listDevices(): StoredDevice[];
   // Reset closes every Device socket (ADR 0005); each Device then reconnects.
   closeDeviceSockets(): void;
   close(): Promise<void>;
@@ -32,16 +43,20 @@ export async function startCoordinator(options: { dbPath: string; port: number }
   const db = openDatabase(options.dbPath);
   // Changed only by Reset; kept here so the handle can still read it after close.
   let epoch = readEpoch(db);
-  // Connectivity is not tracked yet, so every Device shows disconnected.
+  const statusOf = (device: StoredDevice): DeviceStatus => ({ ...device, connected: devices.isConnected(device.deviceId) });
   const snapshot = () => ({
     epoch,
     incidents: listIncidents(db),
     events: listEvents(db),
-    devices: listDevices(db).map((device) => ({ ...device, connected: false })),
+    devices: listDevices(db).map(statusOf),
   });
   const watch = createWatchChannel(snapshot);
 
-  const devices = createDeviceChannel(db);
+  // After a Reset the closing Devices have no row left, so their close is not reported.
+  const devices = createDeviceChannel(db, (deviceId) => {
+    const device = readDevice(db, deviceId);
+    if (device) watch.broadcast({ type: "device", ...statusOf(device) });
+  });
 
   const server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;

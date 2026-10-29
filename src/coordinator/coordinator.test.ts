@@ -151,6 +151,13 @@ function openWatchSocket(coordinator: Coordinator): { next(): Promise<WatchMessa
   };
 }
 
+// A raw Device socket that sends hello once open.
+function openDeviceSocket(coordinator: Coordinator, device: { deviceId: string; resourceId: string }): WebSocket {
+  const socket = new WebSocket(`ws://localhost:${coordinator.port}${deviceSocketPath}`);
+  socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "hello", ...device, epoch: null })));
+  return socket;
+}
+
 describe("The /watch socket", () => {
   it("sends a snapshot with the Incidents and their stored EOC events on connect", async () => {
     const coordinator = await start(":memory:");
@@ -188,6 +195,61 @@ describe("The /watch socket", () => {
       type: "events",
       events: [{ deviceId: null, seq: null, event: { kind: "fieldSet", field: "dob", value: "1985-06-15", source: { type: "eoc" } } }],
     });
+  });
+
+  it("sends the Device as connected after its hello", async () => {
+    const coordinator = await start(":memory:");
+    const watch = openWatchSocket(coordinator);
+    await watch.next();
+
+    openDeviceSocket(coordinator, { deviceId: "device-1", resourceId: "alpha-1" });
+
+    expect(await watch.next()).toEqual({ type: "device", deviceId: "device-1", resourceId: "alpha-1", offset: 0, connected: true });
+  });
+
+  it("sends the Device as disconnected after its socket closes", async () => {
+    const coordinator = await start(":memory:");
+    const watch = openWatchSocket(coordinator);
+    await watch.next();
+    const device = openDeviceSocket(coordinator, { deviceId: "device-1", resourceId: "bravo-2" });
+    expect(await watch.next()).toMatchObject({ type: "device", connected: true });
+
+    device.close();
+
+    expect(await watch.next()).toEqual({ type: "device", deviceId: "device-1", resourceId: "bravo-2", offset: 0, connected: false });
+  });
+
+  it("lists a Device that has sent nothing in the snapshot, with Offset 0", async () => {
+    const coordinator = await start(":memory:");
+    const first = openWatchSocket(coordinator);
+    await first.next();
+    openDeviceSocket(coordinator, { deviceId: "device-1", resourceId: "charlie-3" });
+    await first.next();
+
+    const message = await openWatchSocket(coordinator).next();
+
+    expect(message).toMatchObject({
+      type: "snapshot",
+      devices: [{ deviceId: "device-1", resourceId: "charlie-3", offset: 0, connected: true }],
+    });
+  });
+
+  it("sends the snapshot events in rowid order, with no deviceId or seq for EOC events", async () => {
+    const coordinator = await start(":memory:");
+    await postIncident(coordinator, { resourceId: "alpha-1", name: "Kari Nordmann", triage: "red" });
+    await postIncident(coordinator, { resourceId: "bravo-2", dob: "1985-06-15" });
+
+    const { events } = (await openWatchSocket(coordinator).next()) as Extract<WatchMessage, { type: "snapshot" }>;
+
+    // Stored as name, then triage, then the second Incident's dob.
+    expect(events.map((e) => [e.event.incidentId, e.event.kind === "fieldSet" && e.event.field, e.deviceId, e.seq])).toEqual([
+      ["INC-0001", "name", null, null],
+      ["INC-0001", "triage", null, null],
+      ["INC-0002", "dob", null, null],
+    ]);
+    const [a, b, c] = events.map((e) => e.rowid);
+    expect(a).toBeLessThan(b!);
+    expect(b).toBeLessThan(c!);
   });
 
   it("answers a ping with a pong", async () => {
