@@ -416,6 +416,64 @@ describe("Uploading the Event log", () => {
   });
 });
 
+// A legCompleted by the Device for its Resource's latest Transfer leg in the Incident.
+function completion(incident: Incident, device: { deviceId: string; resourceId: string }): Event {
+  const legId = incident.legs.findLast((l) => l.resourceId === device.resourceId)!.legId;
+  const result = draftEvent({ kind: "legCompleted" }, incident, { ...device, legId }, Date.now);
+  if ("error" in result) throw new Error(result.error);
+  return result;
+}
+
+describe("Completing a Transfer leg", () => {
+  it("closes the Incident on every connected Device with a leg in it once no leg is Active", async () => {
+    const c = await coordinator();
+    const created = await postIncident(c, { resourceId: "alpha-1" });
+    const first = client(c);
+    const second = client(c, { deviceId: "device-2", resourceId: "bravo-2" });
+    const bystander = client(c, { deviceId: "device-3", resourceId: "charlie-3" });
+    await waitFor(first, (s) => s.online && s.snapshotReceived);
+    await waitFor(second, (s) => s.online && s.snapshotReceived);
+    await waitFor(bystander, (s) => s.online && s.snapshotReceived);
+    await second.join(created.incidentId);
+    const joined = second.getState().incidents[0]!;
+
+    // Handover: the earlier Resource completes its leg; the Incident stays Active on both.
+    first.record(completion(joined, { deviceId: "device-1", resourceId: "alpha-1" }));
+    const handedOver = await waitFor(second, (s) => s.incidents[0]?.legs[0]?.completedAt !== null);
+    expect(handedOver.incidents[0]?.closed).toBe(false);
+
+    const last = completion(joined, { deviceId: "device-2", resourceId: "bravo-2" });
+    second.record(last);
+
+    for (const device of [first, second]) {
+      const state = await waitFor(device, (s) => s.incidents[0]?.closed === true);
+      expect(state.incidents[0]?.legs.map((l) => [l.resourceId, l.completedAt !== null])).toEqual([
+        ["alpha-1", true],
+        ["bravo-2", true],
+      ]);
+      expect(state.incidents[0]?.legs[1]?.completedAt).toBe(last.enteredAt);
+    }
+    expect(bystander.getState().incidents).toEqual([]);
+  });
+
+  it("reopens a Closed Incident on a Join", async () => {
+    const c = await coordinator();
+    const created = await postIncident(c, { resourceId: "alpha-1" });
+    const earlier = client(c);
+    const joiner = client(c, { deviceId: "device-2", resourceId: "bravo-2" });
+    await waitFor(earlier, (s) => s.online && s.snapshotReceived);
+    await waitFor(joiner, (s) => s.online && s.snapshotReceived);
+    earlier.record(completion(created, { deviceId: "device-1", resourceId: "alpha-1" }));
+    await waitFor(earlier, (s) => s.incidents[0]?.closed === true);
+
+    expect(await joiner.join(created.incidentId)).toEqual({ ok: true });
+
+    expect(joiner.getState().incidents[0]?.closed).toBe(false);
+    const state = await waitFor(earlier, (s) => s.incidents[0]?.legs.length === 2);
+    expect(state.incidents[0]?.closed).toBe(false);
+  });
+});
+
 async function watchSnapshot(c: Coordinator): Promise<WatchSnapshot> {
   const socket = new WebSocket(`ws://localhost:${c.port}/watch`);
   const message = await new Promise<WatchSnapshot>((resolve) => (socket.onmessage = (e) => resolve(JSON.parse(String(e.data)))));

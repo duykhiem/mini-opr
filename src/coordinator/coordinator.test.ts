@@ -389,6 +389,7 @@ async function connectDevice(coordinator: Coordinator, device: DeviceIdentity) {
     next,
     closed,
     push: (items: { seq: number; event: unknown }[]) => socket.send(JSON.stringify({ type: "push", items })),
+    ping: () => socket.send(JSON.stringify({ type: "ping" })),
   };
 }
 
@@ -468,6 +469,82 @@ describe("Push", () => {
     expect(coordinator.listDevices()).toEqual([{ ...alpha, offset: 1 }]);
     const snapshot = (await openWatchSocket(coordinator).next()) as Extract<WatchMessage, { type: "snapshot" }>;
     expect(snapshot.events.map((e) => e.event.eventId)).toEqual([first.eventId]);
+  });
+});
+
+describe("Completing a Transfer leg", () => {
+  it("lets the first legCompleted stored win, with its enteredAt as completedAt, and sends the Device the Closed Incident", async () => {
+    const coordinator = await start(":memory:");
+    const incident = await createIncidentFor(coordinator, "alpha-1");
+    const device = await connectDevice(coordinator, alpha);
+    const completed = eventBy(alpha, incident, { kind: "legCompleted" });
+
+    device.push([{ seq: 1, event: completed }]);
+
+    expect(await device.next()).toEqual({ type: "ack", upTo: 1 });
+    const message = await device.next();
+    expect(message).toMatchObject({
+      type: "incident",
+      incident: { incidentId: incident.incidentId, closed: true, legs: [{ ...incident.legs[0], completedAt: completed.enteredAt }] },
+    });
+    expect((message as Extract<CoordinatorMessage, { type: "incident" }>).events.map((e) => e.eventId)).toEqual([completed.eventId]);
+  });
+
+  it("stores a second legCompleted for the same leg with no effect, even with an earlier enteredAt", async () => {
+    const coordinator = await start(":memory:");
+    const incident = await createIncidentFor(coordinator, "alpha-1");
+    const device = await connectDevice(coordinator, alpha);
+    const first = eventBy(alpha, incident, { kind: "legCompleted" });
+    device.push([{ seq: 1, event: first }]);
+    expect(await device.next()).toEqual({ type: "ack", upTo: 1 });
+    expect(await device.next()).toMatchObject({ type: "incident" });
+
+    const late = { ...eventBy(alpha, incident, { kind: "legCompleted" }), enteredAt: first.enteredAt - 60_000 };
+    device.push([{ seq: 2, event: late }]);
+
+    expect(await device.next()).toEqual({ type: "ack", upTo: 2 });
+    // No leg changed, so no incident comes before the pong.
+    device.ping();
+    expect(await device.next()).toEqual({ type: "pong" });
+    const snapshot = (await openWatchSocket(coordinator).next()) as Extract<WatchMessage, { type: "snapshot" }>;
+    expect(snapshot.events.map((e) => e.event.eventId)).toEqual([first.eventId, late.eventId]);
+    expect(snapshot.incidents[0]?.legs[0]?.completedAt).toBe(first.enteredAt);
+  });
+
+  it("sends events, the Device, then the Incident with the completed leg and Closed on /watch", async () => {
+    const coordinator = await start(":memory:");
+    const incident = await createIncidentFor(coordinator, "alpha-1");
+    const device = await connectDevice(coordinator, alpha);
+    const watch = openWatchSocket(coordinator);
+    await watch.next();
+    const completed = eventBy(alpha, incident, { kind: "legCompleted" });
+
+    device.push([{ seq: 1, event: completed }]);
+
+    expect(await watch.next()).toMatchObject({ type: "events", events: [{ event: completed }] });
+    expect(await watch.next()).toMatchObject({ type: "device", offset: 1 });
+    expect(await watch.next()).toEqual({
+      type: "incident",
+      incident: { ...incident, closed: true, legs: [{ ...incident.legs[0], completedAt: completed.enteredAt }] },
+    });
+  });
+
+  it("applies an event pushed while the Incident is Closed to the Patient", async () => {
+    const coordinator = await start(":memory:");
+    const incident = await createIncidentFor(coordinator, "alpha-1");
+    const device = await connectDevice(coordinator, alpha);
+    device.push([{ seq: 1, event: eventBy(alpha, incident, { kind: "legCompleted" }) }]);
+    expect(await device.next()).toEqual({ type: "ack", upTo: 1 });
+    expect(await device.next()).toMatchObject({ type: "incident", incident: { closed: true } });
+    const watch = openWatchSocket(coordinator);
+    await watch.next();
+
+    device.push([{ seq: 2, event: eventBy(alpha, incident, { kind: "fieldSet", field: "name", value: "Kari Nordmann" }) }]);
+
+    expect(await device.next()).toEqual({ type: "ack", upTo: 2 });
+    await watch.next();
+    await watch.next();
+    expect(await watch.next()).toMatchObject({ type: "incident", incident: { closed: true, patient: { name: { value: "Kari Nordmann" } } } });
   });
 });
 

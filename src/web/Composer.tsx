@@ -39,7 +39,7 @@ export type ComposerProps = {
   clock: () => number;
   // The "complete my Transfer leg" tab is shown only while the Resource holds an Active leg.
   holdsActiveLeg: boolean;
-  // The Incident is Closed; what locks it is decided in #23.
+  // The Incident is Closed (no Active leg), so nothing can be added.
   locked: boolean;
   onEvent: (event: Event) => void;
 };

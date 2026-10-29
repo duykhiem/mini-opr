@@ -254,8 +254,14 @@ export function joinIncident(
 // A LoggedEvent as it arrives, before parseEvent has checked the event.
 export type PushItem = Omit<LoggedEvent, "event"> & { event: unknown };
 
-// A stored push batch: the Device's new Offset, the events it stored and each Incident they touched.
-export type StoredPush = { offset: number; events: StoredEvent[]; incidents: Incident[] };
+// A stored push batch: the Device's new Offset, the events it stored, each Incident they touched, and each
+// Incident whose legs changed with its full event history, for the Devices with a leg in it (ADR 0005).
+export type StoredPush = {
+  offset: number;
+  events: StoredEvent[];
+  incidents: Incident[];
+  legsChanged: { incident: Incident; events: Event[] }[];
+};
 
 // A bad event is a bug: nothing of the batch is stored and the Offset stays (ADR 0005).
 export type RejectedPush = { seq: number; reason: string };
@@ -305,8 +311,13 @@ export function storePush(db: DatabaseSync, device: Omit<StoredDevice, "offset">
       );
       const readPatient = db.prepare("SELECT state FROM patients WHERE incidentId = ?");
       const writePatient = db.prepare("UPDATE patients SET state = ? WHERE incidentId = ?");
+      // The first legCompleted stored wins; a later one changes no row (ADR 0006).
+      const completeLeg = db.prepare(
+        "UPDATE transfer_legs SET completedAt = ?, completedEventId = ? WHERE legId = ? AND completedAt IS NULL",
+      );
       const events: StoredEvent[] = [];
       const touched = new Set<string>();
+      const legsChanged = new Set<string>();
 
       for (const item of items) {
         if (item.seq <= offset) continue;
@@ -323,13 +334,22 @@ export function storePush(db: DatabaseSync, device: Omit<StoredDevice, "offset">
         );
         const { state } = readPatient.get(event.incidentId) as { state: string };
         writePatient.run(JSON.stringify(applyEvent(JSON.parse(state) as PatientState, event)), event.incidentId);
+        if (event.kind === "legCompleted" && event.source.type === "device") {
+          const { changes } = completeLeg.run(event.enteredAt, event.eventId, event.source.legId);
+          if (Number(changes) > 0) legsChanged.add(event.incidentId);
+        }
         events.push({ rowid: Number(lastInsertRowid), deviceId: device.deviceId, seq: item.seq, event });
         touched.add(event.incidentId);
         offset = item.seq;
       }
 
       db.prepare('UPDATE devices SET "offset" = ? WHERE deviceId = ?').run(offset, device.deviceId);
-      return { offset, events, incidents: [...touched].map((incidentId) => readIncident(db, incidentId)) };
+      return {
+        offset,
+        events,
+        incidents: [...touched].map((incidentId) => readIncident(db, incidentId)),
+        legsChanged: [...legsChanged].map((incidentId) => ({ incident: readIncident(db, incidentId), events: eventsOf(db, incidentId) })),
+      };
     });
   } catch (error) {
     if (error instanceof BadEvent) return { seq: error.seq, reason: error.reason };

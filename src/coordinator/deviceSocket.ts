@@ -188,6 +188,8 @@ export function createDeviceChannel(
           if ("reason" in stored) return reject(socket, stored.reason, stored.seq);
           send(socket, { type: "ack", upTo: stored.offset });
           fanOut(deviceId, stored);
+          // A completed leg goes to every Device with a leg in the Incident, this one included (ADR 0005).
+          for (const { incident, events } of stored.legsChanged) sendIncident(incident, events);
           if (stored.events.length > 0) options.onPush(deviceId, stored);
           return;
         }

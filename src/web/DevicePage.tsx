@@ -167,8 +167,13 @@ function IncidentView(props: {
   const events = [...props.events, ...props.log.map((e) => e.event).filter((e) => !received.has(e.eventId))].sort(compareStamps);
   const patient = events.reduce(applyEvent, emptyPatient);
   const latestVitals = patient.vitals.at(-1)?.vitals;
-  // The Resource writes under its latest Transfer leg in the Incident (ADR 0003).
-  const leg = incident.legs.findLast((l) => l.resourceId === props.device.resourceId);
+  // A legCompleted in the feed counts at once, before the Coordinator's incident shows the leg Completed,
+  // so the leg tab goes away as soon as this Device writes one.
+  const completedLegIds = new Set(events.flatMap((e) => (e.kind === "legCompleted" && e.source.type === "device" ? [e.source.legId] : [])));
+  const myLegs = incident.legs.filter((l) => l.resourceId === props.device.resourceId);
+  const activeLeg = myLegs.findLast((l) => isActive(l) && !completedLegIds.has(l.legId));
+  // The Resource writes under its Active leg, or after Handover under its latest completed one (ADR 0003).
+  const leg = activeLeg ?? myLegs.at(-1);
 
   return (
     <section>
@@ -220,14 +225,14 @@ function IncidentView(props: {
         </ol>
       )}
       {leg && (
-        // Completing a leg and locking a Closed Incident come in #23.
+        // Closed is the Coordinator's: no leg is Active. With my own leg completed I can still edit until then.
         <Composer
           incidentId={incident.incidentId}
           patientId={incident.patientId}
           device={{ ...props.device, legId: leg.legId }}
           clock={Date.now}
-          holdsActiveLeg={false}
-          locked={false}
+          holdsActiveLeg={activeLeg !== undefined}
+          locked={incident.closed}
           onEvent={props.onEvent}
         />
       )}

@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import type { Event, Vitals } from "../shared/event.ts";
+import { isActive, type Incident } from "../shared/incident.ts";
 import type { Resource } from "../shared/resource.ts";
 import type { DeviceStatus, StoredEvent, WatchSnapshot } from "../shared/watch.ts";
 import { useResources } from "./useResources.ts";
@@ -87,6 +88,7 @@ export function CoordinatorPage() {
         ) : (
           <MergedLogView events={state.events} devices={state.devices} resources={resources} />
         )}
+        <IncidentsTable incidents={state.incidents} resources={resources} />
       </div>
     </main>
   );
@@ -148,6 +150,54 @@ type ViewProps = { events: StoredEvent[]; devices: DeviceStatus[]; resources: Re
 
 const nameOf = (resources: Resource[], resourceId: string) =>
   resources.find((r) => r.resourceId === resourceId)?.name ?? resourceId;
+
+// Leg states and Active or Closed, replaced by each incident message on /watch (ADR 0008).
+function IncidentsTable({ incidents, resources }: { incidents: Incident[]; resources: Resource[] }) {
+  return (
+    <section className="card table-card">
+      <h2>Incidents</h2>
+      {incidents.length === 0 ? (
+        <p className="empty">No Incidents yet.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              {["Incident", "Transfer legs", "Status"].map((h) => (
+                <th key={h}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {incidents.map((incident) => (
+              <tr key={incident.incidentId}>
+                <td>
+                  <code>{incident.incidentId}</code>
+                </td>
+                <td>
+                  <div className="legs">
+                    {incident.legs.map((leg) => (
+                      <span key={leg.legId} className="leg">
+                        {nameOf(resources, leg.resourceId)}
+                        <span className={isActive(leg) ? "badge state-active" : "badge state-closed"}>
+                          {isActive(leg) ? "Active" : "Completed"}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td>
+                  <span className={incident.closed ? "badge state-closed" : "badge state-active"}>
+                    {incident.closed ? "Closed" : "Active"}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
 
 function LanesView({ events, devices, resources }: ViewProps) {
   const eocEvents = events.filter((e) => e.deviceId === null);
