@@ -7,23 +7,27 @@ A demo of how one patient record travels with a patient across several ambulance
 ### Dispatch
 
 **EOC**:
-The emergency operations centre that creates Incidents and assigns their Transfer legs. It is not a Device and has no Event log.
+The emergency operations centre that creates Incidents and assigns the first Transfer leg of each. It changes nothing after that. It is not a Device and has no Event log.
 _Avoid_: Dispatcher, AMK, control room
 
 **Incident**:
-One emergency case, with exactly one Patient and an ordered list of Transfer legs.
+One emergency case, with exactly one Patient and the Transfer legs of every Resource that has worked on it. It is Closed while it has no Active leg; a Join reopens it.
 _Avoid_: Case, mission, job
 
 **Transfer leg**:
-One segment of moving the Patient, handled by exactly one Resource on one Device.
+One Resource's part in an Incident, handled by exactly one Resource. It is Active from creation until a Device of that Resource completes it, then Completed for good.
 _Avoid_: Leg (alone), trip, transport, hop
 
 **Active leg**:
-The one Transfer leg of an Incident that is currently under way; the others are planned or completed.
+A Transfer leg that is not yet completed. An Incident can have several at once.
 _Avoid_: Current leg, open leg
 
+**Join**:
+A Resource attaching itself to an existing Incident by pasting its Incident id, which opens a new Transfer leg for that Resource.
+_Avoid_: Subscribe, claim, accept
+
 **Handover**:
-The moment one Transfer leg ends and the next one, with a different Resource, takes over the Patient.
+A Resource joining an Incident that another Resource has worked on. There is no accept step, and the earlier Resource can still edit the Patient.
 _Avoid_: Transfer (alone), switch
 
 ### Care
