@@ -1,5 +1,19 @@
 # CLAUDE.md
 
+Mini OPR: demo of one patient record travelling across ambulance transfers on several devices, synced through one Coordinator. Status: spec and ADRs, no code yet.
+
+## Conventions
+
+- Tickets, docs and code comments in English. Never use the em dash.
+- README stays non-technical; technical decisions go in `docs/adr/`.
+- Use glossary terms exactly; respect "_Avoid_" synonyms.
+
+## Domain
+
+@CONTEXT.md
+
+Before working in an area, read the ADRs in `docs/adr/` that touch it. Flag any conflict with an ADR instead of silently overriding it. See `docs/agents/domain.md`.
+
 ## mattpocock-skills
 
 When a `mattpocock-skills:*` skill (e.g. `grilling`, `domain-modeling`, `wizard`, `codebase-design`, `prototype`) needs to ask the user a question, use the `AskUserQuestion` tool instead of asking in plain text.
