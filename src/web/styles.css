@@ -555,22 +555,58 @@ tr.highlight td {
   color: var(--text-muted);
 }
 
-/* Device composer */
+/* Device page: cards with an edit button */
 
-.composer fieldset {
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: none;
+.card-title {
+  margin-bottom: 12px;
 }
 
-.composer textarea {
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.icon-button:hover {
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+.icon-button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.card-value {
+  margin: 0;
+  font-weight: 600;
+}
+
+.card-value .muted {
+  font-weight: 400;
+}
+
+.card-grid textarea {
   resize: vertical;
 }
 
 .vitals-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -738,21 +774,25 @@ tr.highlight td {
   font-size: 0.85rem;
 }
 
+/* Incident detail: cards side by side, wrapping to the next row, then the Event log viewer */
 .detail-layout {
   display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.detail-layout > .muted {
+  margin: 0;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 20px;
   align-items: start;
 }
 
-.detail-side,
-.detail-main {
-  display: grid;
-  gap: 20px;
-}
-
-.detail-side h2 {
-  margin-bottom: 12px;
+.header-action {
+  margin-left: auto;
 }
 
 .patient-fields {
@@ -773,9 +813,17 @@ tr.highlight td {
 }
 
 .leg-list {
+  display: grid;
+  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.leg-list li {
+  display: grid;
+  gap: 2px;
+  font-size: 0.9rem;
 }
 
 .feed {
@@ -792,8 +840,7 @@ tr.highlight td {
 }
 
 @media (max-width: 760px) {
-  .board,
-  .detail-layout {
+  .board {
     grid-template-columns: minmax(0, 1fr);
   }
 }

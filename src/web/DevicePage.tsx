@@ -2,9 +2,9 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import type { JoinResult, LoggedEvent } from "../device/syncClient.ts";
 import type { Event, Vitals } from "../shared/event.ts";
 import { isActive, type Incident } from "../shared/incident.ts";
-import { applyEvent, compareStamps, emptyPatient, type PatientState } from "../shared/patient.ts";
+import { applyEvent, compareStamps, emptyPatient, type PatientState, type Stamp } from "../shared/patient.ts";
 import type { Resource } from "../shared/resource.ts";
-import { Composer } from "./Composer.tsx";
+import { CompleteLegButton, EditableCard, NoteForm, PatientForm, TriageForm, VitalsForm, type Writer } from "./EditForms.tsx";
 import { useDeviceLock } from "./useDeviceLock.ts";
 import { useResources } from "./useResources.ts";
 import { useSyncClient } from "./useSyncClient.ts";
@@ -337,7 +337,7 @@ function IncidentView(props: {
   const [view, setView] = useState<"feed" | "log">("feed");
   const events = mergeEvents(props.events, props.log);
   const patient = patientOf(events);
-  const latestVitals = patient.vitals.at(-1)?.vitals;
+  const latestVitals = patient.vitals.at(-1);
   // A legCompleted in the feed counts at once, before the Coordinator's incident shows the leg Completed,
   // so the leg tab goes away as soon as this Device writes one.
   const completedLegIds = new Set(events.flatMap((e) => (e.kind === "legCompleted" && e.source.type === "device" ? [e.source.legId] : [])));
@@ -345,6 +345,26 @@ function IncidentView(props: {
   const activeLeg = myLegs.findLast((l) => isActive(l) && !completedLegIds.has(l.legId));
   // The Resource writes under its Active leg, or after Handover under its latest completed one (ADR 0003).
   const leg = activeLeg ?? myLegs.at(-1);
+  // Closed is the Coordinator's: no leg is Active. With my own leg completed I can still edit until then.
+  const writer: Writer | undefined =
+    leg && !incident.closed
+      ? {
+          incidentId: incident.incidentId,
+          patientId: incident.patientId,
+          device: { ...props.device, legId: leg.legId },
+          clock: Date.now,
+          onEvent: props.onEvent,
+        }
+      : undefined;
+  // Each card's edit button shows only while this Device can write.
+  const editWith = (form: (writer: Writer, done: () => void) => ReactNode) => writer && ((done: () => void) => form(writer, done));
+  // Who wrote a value and when, from the Event that set it.
+  const enteredBy = (stamp: Stamp) => {
+    const event = events.find((e) => e.eventId === stamp.eventId);
+    return `${event ? sourceLabel(event, resourceName) : "Unknown"}, ${formatTime(stamp.enteredAt)}`;
+  };
+  const lastChange = events.at(-1);
+  const stored = props.log.filter((e) => e.seq <= props.offset).length;
 
   return (
     <>
@@ -354,82 +374,165 @@ function IncidentView(props: {
         </button>
         <h1>{incident.incidentId}</h1>
         <span className={incident.closed ? "badge state-closed" : "badge state-active"}>{incidentStatus(incident)}</span>
+        {writer && activeLeg && (
+          <div className="header-action">
+            <CompleteLegButton writer={writer} />
+          </div>
+        )}
       </header>
       <div className="detail-layout">
-        <div className="detail-side">
+        {incident.closed && <p className="muted">The Incident is Closed, so nothing can be added.</p>}
+        <div className="card-grid">
+          <EditableCard
+            title="Patient"
+            view={
+              <dl className="patient-fields">
+                <dt>Name</dt>
+                <dd>{patient.name?.value ?? "-"}</dd>
+                <dt>Date of birth</dt>
+                <dd>{patient.dob?.value ?? "-"}</dd>
+                <dt>Triage</dt>
+                <dd>{patient.triage ? <span className={`badge triage-${patient.triage.value}`}>{patient.triage.value}</span> : "-"}</dd>
+                <dt>Latest vitals</dt>
+                <dd>{latestVitals ? formatVitals(latestVitals.vitals) : "-"}</dd>
+                <dt>Notes</dt>
+                <dd>{patient.notes.length}</dd>
+                <dt>Last change</dt>
+                <dd>{lastChange ? enteredBy(lastChange) : "-"}</dd>
+                <dt>Patient id</dt>
+                <dd>
+                  <code title={incident.patientId}>{incident.patientId.slice(0, 8)}</code>
+                </dd>
+              </dl>
+            }
+            edit={editWith((writer, done) => <PatientForm writer={writer} onDone={done} patient={patient} />)}
+          />
+          <EditableCard
+            title="Triage"
+            view={
+              patient.triage ? (
+                <p className="card-value">
+                  <span className={`badge triage-${patient.triage.value}`}>{patient.triage.value}</span>{" "}
+                  <span className="muted">by {enteredBy(patient.triage)}</span>
+                </p>
+              ) : (
+                <p className="muted">Not set.</p>
+              )
+            }
+            edit={editWith((writer, done) => <TriageForm writer={writer} onDone={done} patient={patient} />)}
+          />
+          <EditableCard
+            title={`Vitals (${patient.vitals.length})`}
+            view={
+              patient.vitals.length === 0 ? (
+                <p className="muted">No vitals yet.</p>
+              ) : (
+                <ol className="feed">
+                  {patient.vitals.map((entry) => (
+                    <li key={entry.eventId}>
+                      <span className="muted">{enteredBy(entry)}</span>
+                      <br />
+                      {formatVitals(entry.vitals)}
+                    </li>
+                  ))}
+                </ol>
+              )
+            }
+            edit={editWith((writer, done) => <VitalsForm writer={writer} onDone={done} />)}
+          />
+          <EditableCard
+            title={`Notes (${patient.notes.length})`}
+            view={
+              patient.notes.length === 0 ? (
+                <p className="muted">No notes yet.</p>
+              ) : (
+                <ol className="feed">
+                  {patient.notes.map((note) => (
+                    <li key={note.eventId}>
+                      <span className="muted">{enteredBy(note)}</span>
+                      <br />
+                      {note.text}
+                    </li>
+                  ))}
+                </ol>
+              )
+            }
+            edit={editWith((writer, done) => <NoteForm writer={writer} onDone={done} />)}
+          />
           <section className="card">
-            <h2>Patient</h2>
-            <dl className="patient-fields">
-              <dt>Name</dt>
-              <dd>{patient.name?.value ?? "-"}</dd>
-              <dt>Date of birth</dt>
-              <dd>{patient.dob?.value ?? "-"}</dd>
-              <dt>Triage</dt>
-              <dd>{patient.triage ? <span className={`badge triage-${patient.triage.value}`}>{patient.triage.value}</span> : "-"}</dd>
-              <dt>Latest vitals</dt>
-              <dd>{latestVitals ? formatVitals(latestVitals) : "-"}</dd>
-            </dl>
-          </section>
-          <section className="card">
-            <h2>Transfer legs</h2>
-            <ul className="legs leg-list">
+            <h2 className="card-title">Transfer legs</h2>
+            <ul className="leg-list">
               {incident.legs.map((leg) => (
-                <li key={leg.legId} className="leg">
-                  {resourceName(leg.resourceId)}:{" "}
-                  <span className={isActive(leg) ? "badge state-active" : "badge state-closed"}>
-                    {isActive(leg) ? "Active" : "Completed"}
+                <li key={leg.legId}>
+                  <span className="leg">
+                    {resourceName(leg.resourceId)}
+                    {leg.resourceId === props.device.resourceId && <span className="muted"> (this Resource)</span>}
+                    <span className={isActive(leg) ? "badge state-active" : "badge state-closed"}>
+                      {isActive(leg) ? "Active" : "Completed"}
+                    </span>
+                  </span>
+                  <span className="muted">
+                    Started {formatTime(leg.createdAt)}
+                    {leg.completedAt !== null && `, completed ${formatTime(leg.completedAt)}`}
                   </span>
                 </li>
               ))}
             </ul>
           </section>
-        </div>
-        <div className="detail-main">
           <section className="card">
-            <div className="view-toggle" role="group" aria-label="View">
-              <button type="button" aria-pressed={view === "feed"} onClick={() => setView("feed")}>
-                Feed
-              </button>
-              <button type="button" aria-pressed={view === "log"} onClick={() => setView("log")}>
-                My Event log
-              </button>
-            </div>
-            {view === "feed" ? (
-              <ol className="feed">
-                {events.map((e) => (
-                  <li key={e.eventId}>
-                    <span className="muted">{new Date(e.enteredAt).toLocaleTimeString()}</span> <strong>{sourceLabel(e, resourceName)}</strong>:{" "}
-                    {describeEvent(e)}
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <ol className="feed">
-                {props.log.length === 0 && <li className="muted">No events from this Device yet.</li>}
-                {props.log.map(({ seq, event }) => (
-                  <li key={event.eventId}>
-                    <span className="muted">
-                      #{seq} {new Date(event.enteredAt).toLocaleTimeString()}
-                    </span>{" "}
-                    {describeEvent(event)} ({seq <= props.offset ? "stored" : "waiting"})
-                  </li>
-                ))}
-              </ol>
-            )}
+            <h2 className="card-title">Incident</h2>
+            <dl className="patient-fields">
+              <dt>Incident id</dt>
+              <dd>
+                <code>{incident.incidentId}</code>
+              </dd>
+              <dt>Status</dt>
+              <dd>
+                <span className={incident.closed ? "badge state-closed" : "badge state-active"}>{incidentStatus(incident)}</span>
+              </dd>
+              <dt>Created</dt>
+              <dd>{formatTime(incident.createdAt)}</dd>
+              <dt>Events</dt>
+              <dd>{events.length}</dd>
+              <dt>My Event log</dt>
+              <dd>
+                {stored} of {props.log.length} stored
+              </dd>
+            </dl>
           </section>
-          {leg && (
-            // Closed is the Coordinator's: no leg is Active. With my own leg completed I can still edit until then.
-            <Composer
-              incidentId={incident.incidentId}
-              patientId={incident.patientId}
-              device={{ ...props.device, legId: leg.legId }}
-              clock={Date.now}
-              holdsActiveLeg={activeLeg !== undefined}
-              locked={incident.closed}
-              onEvent={props.onEvent}
-            />
-          )}
         </div>
+        <section className="card">
+          <div className="view-toggle" role="group" aria-label="View">
+            <button type="button" aria-pressed={view === "feed"} onClick={() => setView("feed")}>
+              Feed
+            </button>
+            <button type="button" aria-pressed={view === "log"} onClick={() => setView("log")}>
+              My Event log
+            </button>
+          </div>
+          {view === "feed" ? (
+            <ol className="feed">
+              {events.map((e) => (
+                <li key={e.eventId}>
+                  <span className="muted">{formatTime(e.enteredAt)}</span> <strong>{sourceLabel(e, resourceName)}</strong>:{" "}
+                  {describeEvent(e)}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <ol className="feed">
+              {props.log.length === 0 && <li className="muted">No events from this Device yet.</li>}
+              {props.log.map(({ seq, event }) => (
+                <li key={event.eventId}>
+                  <span className="muted">
+                    #{seq} {formatTime(event.enteredAt)}
+                  </span>{" "}
+                  {describeEvent(event)} ({seq <= props.offset ? "stored" : "waiting"})
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
       </div>
     </>
   );
@@ -466,6 +569,8 @@ function WifiIcon({ off }: { off: boolean }) {
     </svg>
   );
 }
+
+const formatTime = (ms: number) => new Date(ms).toLocaleTimeString();
 
 function sourceLabel(event: Event, resourceName: (id: string) => string): string {
   return event.source.type === "eoc" ? "EOC" : resourceName(event.source.resourceId);

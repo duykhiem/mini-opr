@@ -25,7 +25,7 @@ The demo is manual. A start page links to the EOC page, one Device tab for each 
 
 - **EOC page.** Creates Incidents. Each Incident has one Patient and its Transfer legs. The EOC creates only the first leg, for one Resource, and changes nothing after that. The EOC is not a Device and has no Event log. When it creates an Incident, it may give the Patient's name, date of birth and triage. It lists every Incident with its short id, such as `INC-4821`, which other Resources use to Join.
 - **Device page.** One browser tab, with a left menu that also shows whether the Device is online or offline. There is no auth.
-  - **Incidents** (home): the Incidents its Resource works on, as tiles in an Active and a Closed column. Clicking a tile opens the Incident: the Patient and its Transfer legs on one side; every change from every Resource in time order, its own Event log and the composer on the other.
+  - **Incidents** (home): the Incidents its Resource works on, as tiles in an Active and a Closed column. Clicking a tile opens the Incident: a row of cards for the Patient, triage, vitals, notes, Transfer legs and the Incident, where an edit button on the first four opens the inputs to change them; below them, every change from every Resource in time order and its own Event log. The button to complete this Resource's Transfer leg sits in the header.
   - **Resource**: picks one of three seeded Resources (also from the `?resource=` URL param) and Joins an Incident by its id.
 - **Coordinator page.** Shows each Device's events and Offset side by side, and the merged log. The Reset button lives here.
 
