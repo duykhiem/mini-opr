@@ -20,6 +20,7 @@ export type JoinRejectReason = "unknown";
 export type CoordinatorMessage =
   | { type: "welcome"; epoch: string; offset: number }
   | { type: "ack"; upTo: number } // after the push batch is committed
+  | { type: "events"; events: Event[] } // realtime fan-out of another Device's stored events
   | { type: "snapshot"; incidents: Incident[]; events: Event[] }
   // Legs changed: the whole Incident and its full event history.
   | { type: "incident"; incident: Incident; events: Event[] }

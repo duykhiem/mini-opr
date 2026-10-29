@@ -105,13 +105,25 @@ export function createDeviceChannel(
     else connectedSockets.delete(deviceId);
   }
 
-  // The Resource of each socket, from its hello.
-  const resources = new Map<WebSocket, string>();
+  // The Device and Resource of each socket, from its hello.
+  const identities = new Map<WebSocket, { deviceId: string; resourceId: string }>();
 
   function sendIncident(incident: Incident, events: Event[]): void {
     const legResources = new Set(incident.legs.map((leg) => leg.resourceId));
-    for (const [socket, resourceId] of resources) {
+    for (const [socket, { resourceId }] of identities) {
       if (legResources.has(resourceId) && socket.readyState === socket.OPEN) send(socket, { type: "incident", incident, events });
+    }
+  }
+
+  // Fan-out (ADR 0005): each stored event goes to every connected Device whose Resource has a Transfer
+  // leg in its Incident, including other Devices of the sender's Resource, but to no socket of the sender:
+  // a Device's own events are in its Event log, never among those it receives.
+  function fanOut(senderId: string, { events, incidents }: StoredPush): void {
+    const resourcesByIncident = new Map(incidents.map((i) => [i.incidentId, new Set(i.legs.map((leg) => leg.resourceId))]));
+    for (const [socket, { deviceId, resourceId }] of identities) {
+      if (deviceId === senderId || socket.readyState !== socket.OPEN) continue;
+      const visible = events.filter((e) => resourcesByIncident.get(e.event.incidentId)?.has(resourceId)).map((e) => e.event);
+      if (visible.length > 0) send(socket, { type: "events", events: visible });
     }
   }
 
@@ -138,7 +150,7 @@ export function createDeviceChannel(
         if (message.type !== "hello") return reject(socket, "first message must be hello");
         if (!resourceExists(db, message.resourceId)) return reject(socket, `unknown resourceId ${message.resourceId}`);
         deviceId = message.deviceId;
-        resources.set(socket, message.resourceId);
+        identities.set(socket, { deviceId: message.deviceId, resourceId: message.resourceId });
         const offset = registerDevice(db, message.deviceId, message.resourceId);
         send(socket, { type: "welcome", epoch: readEpoch(db), offset });
         send(socket, { type: "snapshot", ...snapshotFor(db, message.resourceId) });
@@ -156,7 +168,7 @@ export function createDeviceChannel(
           return send(socket, { type: "pong" });
         }
         case "join": {
-          const joined = joinIncident(db, message.incidentId, resources.get(socket)!, Date.now());
+          const joined = joinIncident(db, message.incidentId, identities.get(socket)!.resourceId, Date.now());
           // A typo is a user error, not a bug: reply and keep the socket open.
           if (joined === null) return send(socket, { type: "joinRejected", incidentId: message.incidentId, reason: "unknown" });
           // The joining socket is among them, as its Resource now has a leg.
@@ -167,7 +179,7 @@ export function createDeviceChannel(
         case "push": {
           let stored: ReturnType<typeof storePush>;
           try {
-            stored = storePush(db, { deviceId, resourceId: resources.get(socket)! }, message.items);
+            stored = storePush(db, identities.get(socket)!, message.items);
           } catch (error) {
             // The transaction has rolled back; fail loudly on this socket instead of on the process.
             console.error(error);
@@ -175,6 +187,7 @@ export function createDeviceChannel(
           }
           if ("reason" in stored) return reject(socket, stored.reason, stored.seq);
           send(socket, { type: "ack", upTo: stored.offset });
+          fanOut(deviceId, stored);
           if (stored.events.length > 0) options.onPush(deviceId, stored);
           return;
         }
@@ -185,7 +198,7 @@ export function createDeviceChannel(
 
     socket.on("close", () => {
       clearTimeout(pingTimer);
-      resources.delete(socket);
+      identities.delete(socket);
       if (deviceId === undefined) return;
       setConnected(deviceId, socket, false);
       report(deviceId);

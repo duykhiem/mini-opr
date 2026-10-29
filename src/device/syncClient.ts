@@ -134,6 +134,9 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       case "snapshot":
         update({ incidents: message.incidents, received: storeReceived(message.events), snapshotReceived: true });
         return;
+      case "events":
+        update({ received: storeReceived(message.events) });
+        return;
       case "incident":
         update({ incidents: replaceIncident(message.incident), received: storeReceived(message.events) });
         settleJoins(message.incident.incidentId, { ok: true });

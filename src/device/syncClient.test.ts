@@ -344,17 +344,24 @@ describe("Join", () => {
   });
 });
 
-// A note by device-1 on alpha-1 under its latest Transfer leg in the Incident.
-function note(incident: Incident, text: string, legId = incident.legs.findLast((l) => l.resourceId === "alpha-1")!.legId): Event {
+type DeviceIdentity = { deviceId: string; resourceId: string };
+
+const device1: DeviceIdentity = { deviceId: "device-1", resourceId: "alpha-1" };
+const bravo: DeviceIdentity = { deviceId: "device-2", resourceId: "bravo-2" };
+
+// A note by the Device under its Resource's latest Transfer leg in the Incident, unless a legId is given.
+function noteBy(device: DeviceIdentity, incident: Incident, text: string, legId?: string): Event {
   const result = draftEvent(
     { kind: "noteAdded", text },
     incident,
-    { deviceId: "device-1", resourceId: "alpha-1", legId },
+    { ...device, legId: legId ?? incident.legs.findLast((l) => l.resourceId === device.resourceId)!.legId },
     Date.now,
   );
   if ("error" in result) throw new Error(result.error);
   return result;
 }
+
+const note = (incident: Incident, text: string, legId?: string) => noteBy(device1, incident, text, legId);
 
 describe("Uploading the Event log", () => {
   it("writes an Event to the Event log with the next seq, pushes it and moves the Offset on ack", async () => {
@@ -415,3 +422,55 @@ async function watchSnapshot(c: Coordinator): Promise<WatchSnapshot> {
   socket.close();
   return message;
 }
+
+describe("Realtime fan-out", () => {
+  it("sends a stored event to another Device of the same Resource, and not back to the sender", async () => {
+    const c = await coordinator();
+    const incident = await postIncident(c, { resourceId: "alpha-1" });
+    const sender = client(c, { deviceId: "device-1" });
+    const otherStorage = memoryStorage();
+    const other = client(c, { deviceId: "device-2", storage: otherStorage });
+    await waitFor(sender, (s) => s.online);
+    await waitFor(other, (s) => s.online);
+    const event = note(incident, "Breathing normally");
+
+    sender.record(event);
+
+    await waitFor(other, (s) => s.received.some((e) => e.eventId === event.eventId));
+    expect(JSON.parse(otherStorage.getItem("opr:device-2:received")!)).toContainEqual(event);
+    // One more round trip, so an echo of the first event would have arrived by now.
+    sender.record(note(incident, "Alert"));
+    await waitFor(sender, (s) => s.offset === 2);
+    expect(sender.getState().received.map((e) => e.eventId)).not.toContain(event.eventId);
+  });
+
+  it("sends nothing to a Resource with no Transfer leg in the Incident, and after a Join fans out both ways", async () => {
+    const c = await coordinator();
+    const incident = await postIncident(c, { resourceId: "alpha-1" });
+    const alpha = client(c, { deviceId: "device-1", resourceId: "alpha-1" });
+    const bravoDevice = client(c, bravo);
+    await waitFor(alpha, (s) => s.online);
+    await waitFor(bravoDevice, (s) => s.online);
+    // Anything fanned out to bravo before its Join would land while it has no Incident.
+    let receivedWithoutIncident = false;
+    bravoDevice.subscribe(() => {
+      const s = bravoDevice.getState();
+      if (s.incidents.length === 0 && s.received.length > 0) receivedWithoutIncident = true;
+    });
+
+    const before = note(incident, "Before the Join");
+    alpha.record(before);
+    await waitFor(alpha, (s) => s.offset === 1);
+    expect(await bravoDevice.join(incident.incidentId)).toEqual({ ok: true });
+    expect(receivedWithoutIncident).toBe(false);
+
+    const joined = bravoDevice.getState().incidents[0]!;
+    const fromBravo = noteBy(bravo, joined, "Handover received");
+    bravoDevice.record(fromBravo);
+    await waitFor(alpha, (s) => s.received.some((e) => e.eventId === fromBravo.eventId));
+    // The earlier Resource can still edit the Patient.
+    const fromAlpha = note(joined, "Leaving the scene");
+    alpha.record(fromAlpha);
+    await waitFor(bravoDevice, (s) => s.received.some((e) => e.eventId === fromAlpha.eventId));
+  });
+});

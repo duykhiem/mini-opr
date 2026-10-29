@@ -529,3 +529,19 @@ describe("The Patient projection", () => {
     );
   });
 });
+
+describe("Fan-out", () => {
+  it("sends nothing to another socket of the sending Device", async () => {
+    const coordinator = await start(":memory:");
+    const incident = await createIncidentFor(coordinator, "alpha-1");
+    const sender = await connectDevice(coordinator, alpha);
+    const stale = await connectDevice(coordinator, alpha);
+
+    sender.push([{ seq: 1, event: noteBy(alpha, incident, "Breathing normally") }]);
+    expect(await sender.next()).toEqual({ type: "ack", upTo: 1 });
+
+    // An empty push is a round trip: anything fanned out to this socket would arrive before its ack.
+    stale.push([]);
+    expect(await stale.next()).toEqual({ type: "ack", upTo: 1 });
+  });
+});
