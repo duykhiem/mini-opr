@@ -579,3 +579,221 @@ tr.highlight td {
   font-weight: 400;
   color: var(--danger);
 }
+
+/* Device page: left menu */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.app-shell main {
+  width: 100%;
+}
+
+.rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  height: 100vh;
+  padding: 12px 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.rail-avatar {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 12px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+
+.rail-item,
+.rail-status {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  width: 64px;
+  padding: 8px 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.rail-item {
+  background: none;
+  border: none;
+}
+
+.rail-item:hover {
+  color: var(--text);
+}
+
+.rail-item[aria-current="page"] {
+  color: var(--accent);
+  background: var(--surface-muted);
+}
+
+.rail-bottom {
+  margin-top: auto;
+}
+
+.rail-status.online {
+  color: var(--ok);
+}
+
+.rail-status.offline {
+  color: var(--danger);
+}
+
+.page-title {
+  margin-bottom: 20px;
+}
+
+.sync-error {
+  margin-bottom: 16px;
+}
+
+.resource-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 360px));
+  gap: 20px;
+  align-items: start;
+}
+
+/* Device page: Incident tiles */
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  align-items: start;
+}
+
+.board-column h2 {
+  margin-bottom: 12px;
+}
+
+.board-column .empty {
+  padding: 16px 0;
+  text-align: left;
+}
+
+.tiles {
+  display: grid;
+  gap: 12px;
+}
+
+.tile {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 12px 16px;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--text-muted);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.tile:hover {
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tile-patient {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.tile-legs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Device page: Incident detail */
+
+.back {
+  padding: 6px 10px;
+  font-size: 0.85rem;
+}
+
+.detail-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.detail-side,
+.detail-main {
+  display: grid;
+  gap: 20px;
+}
+
+.detail-side h2 {
+  margin-bottom: 12px;
+}
+
+.patient-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.patient-fields dt {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.patient-fields dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.leg-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.feed {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  font-size: 0.9rem;
+  list-style: none;
+}
+
+.feed li {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 760px) {
+  .board,
+  .detail-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -2,12 +2,14 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import type { JoinResult, LoggedEvent } from "../device/syncClient.ts";
 import type { Event, Vitals } from "../shared/event.ts";
 import { isActive, type Incident } from "../shared/incident.ts";
-import { applyEvent, compareStamps, emptyPatient } from "../shared/patient.ts";
+import { applyEvent, compareStamps, emptyPatient, type PatientState } from "../shared/patient.ts";
 import type { Resource } from "../shared/resource.ts";
 import { Composer } from "./Composer.tsx";
 import { useDeviceLock } from "./useDeviceLock.ts";
 import { useResources } from "./useResources.ts";
 import { useSyncClient } from "./useSyncClient.ts";
+
+type View = { page: "incidents" } | { page: "resource" } | { page: "incident"; incidentId: string };
 
 export function DevicePage({ resourceId: initialResourceId }: { resourceId: string | null }) {
   const { resources, error } = useResources();
@@ -26,26 +28,56 @@ export function DevicePage({ resourceId: initialResourceId }: { resourceId: stri
 
   const picker = <ResourcePicker resources={resources} resourceId={resourceId} onChoose={choose} />;
 
+  if (resourceId !== null && lock === "held") {
+    return <Device key={resourceId} resourceId={resourceId} resourceName={resourceName} picker={picker} />;
+  }
+
+  // No Device yet: only the Resource menu, to pick one.
   return (
-    <main>
-      {resourceId !== null && lock === "held" ? (
-        <Device key={resourceId} resourceId={resourceId} resourceName={resourceName} picker={picker} />
-      ) : (
-        <header>{picker}</header>
-      )}
-      {error && <p role="alert">{error}</p>}
-      {resourceId === null && <p>Pick a Resource.</p>}
-      {resourceId !== null && lock === "taken" && (
-        <p role="alert">Resource {resourceName(resourceId)} is already open in another tab.</p>
-      )}
-    </main>
+    <Shell rail={<RailItem icon={<TruckIcon />} label="Resource" current onClick={() => {}} />}>
+      <ResourceView picker={picker}>
+        {error && (
+          <p role="alert" className="alert">
+            {error}
+          </p>
+        )}
+        {resourceId === null && <p className="muted">Pick a Resource.</p>}
+        {resourceId !== null && lock === "taken" && (
+          <p role="alert" className="alert">
+            Resource {resourceName(resourceId)} is already open in another tab.
+          </p>
+        )}
+      </ResourceView>
+    </Shell>
+  );
+}
+
+function Shell(props: { avatar?: ReactNode; rail: ReactNode; status?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="app-shell">
+      <nav className="rail" aria-label="Device menu">
+        {props.avatar}
+        {props.rail}
+        <div className="rail-bottom">{props.status}</div>
+      </nav>
+      <main>{props.children}</main>
+    </div>
+  );
+}
+
+function RailItem(props: { icon: ReactNode; label: string; current: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className="rail-item" aria-current={props.current ? "page" : undefined} onClick={props.onClick}>
+      {props.icon}
+      <span>{props.label}</span>
+    </button>
   );
 }
 
 function ResourcePicker(props: { resources: Resource[]; resourceId: string | null; onChoose: (id: string) => void }) {
   return (
-    <label>
-      Resource{" "}
+    <label className="field">
+      Resource
       <select value={props.resourceId ?? ""} onChange={(e) => props.onChoose(e.target.value)}>
         <option value="" disabled>
           Choose
@@ -60,46 +92,95 @@ function ResourcePicker(props: { resources: Resource[]; resourceId: string | nul
   );
 }
 
+function ResourceView(props: { picker: ReactNode; children?: ReactNode }) {
+  return (
+    <>
+      <h1 className="page-title">Resource</h1>
+      <div className="resource-layout">
+        <section className="card form">
+          <h2>This Device</h2>
+          {props.picker}
+        </section>
+        {props.children}
+      </div>
+    </>
+  );
+}
+
 function Device(props: { resourceId: string; resourceName: (id: string) => string; picker: ReactNode }) {
   const { resourceId, resourceName } = props;
   const { deviceId, state, join, record } = useSyncClient(resourceId);
-  const [incidentId, setIncidentId] = useState<string | null>(null);
-  const incident = state.incidents.find((i) => i.incidentId === incidentId);
+  const [view, setView] = useState<View>({ page: "incidents" });
+  const incident = view.page === "incident" ? state.incidents.find((i) => i.incidentId === view.incidentId) : undefined;
+
+  const received = (incidentId: string) => state.received.filter((e) => e.incidentId === incidentId);
+  const log = (incidentId: string) => state.log.filter((e) => e.event.incidentId === incidentId);
+  const open = (incidentId: string) => setView({ page: "incident", incidentId });
+
+  const initials = resourceName(resourceId)
+    .split(/\s+/)
+    .map((word) => word[0])
+    .join("");
 
   return (
-    <>
-      <header>
-        {props.picker}
-        <span> {state.online ? "online" : "offline"}</span>
-        {state.error && <span role="alert"> sync error: {state.error}</span>}
-        <JoinField join={join} onJoined={setIncidentId} />
-      </header>
-      <section>
-        <h2>Incidents</h2>
-        {state.incidents.length === 0 && <p>No Incidents yet.</p>}
-        <ul>
-          {state.incidents.map((i) => (
-            <li key={i.incidentId}>
-              <button onClick={() => setIncidentId(i.incidentId)} aria-pressed={i.incidentId === incidentId}>
-                {i.incidentId} ({incidentStatus(i)})
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
+    <Shell
+      avatar={
+        <span className="rail-avatar" title={resourceName(resourceId)}>
+          {initials}
+        </span>
+      }
+      rail={
+        <>
+          <RailItem
+            icon={<GridIcon />}
+            label="Incidents"
+            current={view.page !== "resource"}
+            onClick={() => setView({ page: "incidents" })}
+          />
+          <RailItem icon={<TruckIcon />} label="Resource" current={view.page === "resource"} onClick={() => setView({ page: "resource" })} />
+        </>
+      }
+      status={
+        <span className={state.online ? "rail-status online" : "rail-status offline"} role="status">
+          <WifiIcon off={!state.online} />
+          {state.online ? "Online" : "Offline"}
+        </span>
+      }
+    >
+      {state.error && (
+        <p role="alert" className="alert sync-error">
+          Sync error: {state.error}
+        </p>
+      )}
+      {view.page === "resource" && (
+        <ResourceView picker={props.picker}>
+          <JoinField join={join} onJoined={open} />
+        </ResourceView>
+      )}
+      {view.page === "incidents" && (
+        <IncidentBoard
+          incidents={state.incidents}
+          patientOf={(i) => patientOf(mergeEvents(received(i.incidentId), log(i.incidentId)))}
+          resourceId={resourceId}
+          resourceName={resourceName}
+          onOpen={open}
+        />
+      )}
+      {view.page === "incident" && !incident && <p className="muted">This Incident is no longer on this Device.</p>}
       {incident && (
         <IncidentView
           key={incident.incidentId}
           incident={incident}
-          events={state.received.filter((e) => e.incidentId === incident.incidentId)}
-          log={state.log.filter((e) => e.event.incidentId === incident.incidentId)}
+          events={received(incident.incidentId)}
+          log={log(incident.incidentId)}
           offset={state.offset}
           device={{ deviceId, resourceId }}
           onEvent={record}
+          onBack={() => setView({ page: "incidents" })}
           resourceName={resourceName}
         />
       )}
-    </>
+    </Shell>
   );
 }
 
@@ -126,11 +207,13 @@ function JoinField(props: { join: (incidentId: string) => Promise<JoinResult>; o
   }
 
   return (
-    <form onSubmit={submit}>
-      <label>
-        Join Incident <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="INC-0001" />
+    <form onSubmit={submit} className="card form">
+      <h2>Join Incident</h2>
+      <label className="field">
+        Incident id
+        <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="INC-0001" />
       </label>
-      <button type="submit" disabled={pending || value.trim() === ""}>
+      <button type="submit" className="button-primary" disabled={pending || value.trim() === ""}>
         {pending ? "Joining..." : "Join"}
       </button>
       {error && (
@@ -151,6 +234,95 @@ function joinFailure(reason: Exclude<JoinResult, { ok: true }>["reason"], incide
   }
 }
 
+// Home: one tile per Incident, in an Active and a Closed column.
+function IncidentBoard(props: {
+  incidents: Incident[];
+  patientOf: (incident: Incident) => PatientState;
+  resourceId: string;
+  resourceName: (id: string) => string;
+  onOpen: (incidentId: string) => void;
+}) {
+  const newestFirst = [...props.incidents].sort((a, b) => b.createdAt - a.createdAt);
+  const columns = [
+    { title: "Active", incidents: newestFirst.filter((i) => !i.closed) },
+    { title: "Closed", incidents: newestFirst.filter((i) => i.closed) },
+  ];
+
+  return (
+    <>
+      <h1 className="page-title">Incidents</h1>
+      <div className="board">
+        {columns.map((column) => (
+          <section key={column.title} className="board-column" aria-label={`${column.title} Incidents`}>
+            <h2>
+              {column.title} <span className="muted">({column.incidents.length})</span>
+            </h2>
+            {column.incidents.length === 0 && <p className="empty">No {column.title} Incidents.</p>}
+            <div className="tiles">
+              {column.incidents.map((incident) => (
+                <IncidentTile
+                  key={incident.incidentId}
+                  incident={incident}
+                  patient={props.patientOf(incident)}
+                  resourceId={props.resourceId}
+                  resourceName={props.resourceName}
+                  onOpen={() => props.onOpen(incident.incidentId)}
+                />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function IncidentTile(props: {
+  incident: Incident;
+  patient: PatientState;
+  resourceId: string;
+  resourceName: (id: string) => string;
+  onOpen: () => void;
+}) {
+  const { incident, patient } = props;
+  const triage = patient.triage?.value;
+  const myLeg = incident.legs.findLast((l) => l.resourceId === props.resourceId);
+
+  return (
+    <button
+      type="button"
+      className="tile"
+      style={triage ? { borderLeftColor: `var(--triage-${triage})` } : undefined}
+      onClick={props.onOpen}
+    >
+      <span className="tile-head">
+        <code className="incident-id">{incident.incidentId}</code>
+        {triage && <span className={`badge triage-${triage}`}>{triage}</span>}
+      </span>
+      <span className="tile-patient">{patient.name?.value ?? <span className="muted">Unknown patient</span>}</span>
+      {patient.dob && <span className="muted">Born {patient.dob.value}</span>}
+      <span className="tile-legs">
+        {incident.legs.map((leg) => (
+          <span key={leg.legId} className={isActive(leg) ? "badge state-active" : "badge state-closed"}>
+            {props.resourceName(leg.resourceId)}
+          </span>
+        ))}
+      </span>
+      {myLeg && <span className="muted">My leg: {isActive(myLeg) ? "Active" : "Completed"}</span>}
+    </button>
+  );
+}
+
+// The Device's own events show at once, before the Coordinator stores them.
+function mergeEvents(received: Event[], log: LoggedEvent[]): Event[] {
+  const known = new Set(received.map((e) => e.eventId));
+  return [...received, ...log.map((e) => e.event).filter((e) => !known.has(e.eventId))].sort(compareStamps);
+}
+
+function patientOf(events: Event[]): PatientState {
+  return events.reduce(applyEvent, emptyPatient);
+}
+
 function IncidentView(props: {
   incident: Incident;
   events: Event[]; // received from the Coordinator
@@ -158,14 +330,13 @@ function IncidentView(props: {
   offset: number;
   device: { deviceId: string; resourceId: string };
   onEvent: (event: Event) => void;
+  onBack: () => void;
   resourceName: (id: string) => string;
 }) {
   const { incident, resourceName } = props;
   const [view, setView] = useState<"feed" | "log">("feed");
-  // The Device's own events show at once, before the Coordinator stores them.
-  const received = new Set(props.events.map((e) => e.eventId));
-  const events = [...props.events, ...props.log.map((e) => e.event).filter((e) => !received.has(e.eventId))].sort(compareStamps);
-  const patient = events.reduce(applyEvent, emptyPatient);
+  const events = mergeEvents(props.events, props.log);
+  const patient = patientOf(events);
   const latestVitals = patient.vitals.at(-1)?.vitals;
   // A legCompleted in the feed counts at once, before the Coordinator's incident shows the leg Completed,
   // so the leg tab goes away as soon as this Device writes one.
@@ -176,67 +347,123 @@ function IncidentView(props: {
   const leg = activeLeg ?? myLegs.at(-1);
 
   return (
-    <section>
-      <h2>
-        {incident.incidentId} ({incidentStatus(incident)})
-      </h2>
-      <dl>
-        <dt>Name</dt>
-        <dd>{patient.name?.value ?? "-"}</dd>
-        <dt>Date of birth</dt>
-        <dd>{patient.dob?.value ?? "-"}</dd>
-        <dt>Triage</dt>
-        <dd>{patient.triage?.value ?? "-"}</dd>
-        <dt>Latest vitals</dt>
-        <dd>{latestVitals ? formatVitals(latestVitals) : "-"}</dd>
-      </dl>
-      <h3>Transfer legs</h3>
-      <ul>
-        {incident.legs.map((leg) => (
-          <li key={leg.legId}>
-            {resourceName(leg.resourceId)}: {isActive(leg) ? "Active" : "Completed"}
-          </li>
-        ))}
-      </ul>
-      <div className="view-toggle" role="group" aria-label="View">
-        <button type="button" aria-pressed={view === "feed"} onClick={() => setView("feed")}>
-          Feed
+    <>
+      <header className="page-header">
+        <button type="button" className="button-small back" onClick={props.onBack}>
+          ← Incidents
         </button>
-        <button type="button" aria-pressed={view === "log"} onClick={() => setView("log")}>
-          My Event log
-        </button>
+        <h1>{incident.incidentId}</h1>
+        <span className={incident.closed ? "badge state-closed" : "badge state-active"}>{incidentStatus(incident)}</span>
+      </header>
+      <div className="detail-layout">
+        <div className="detail-side">
+          <section className="card">
+            <h2>Patient</h2>
+            <dl className="patient-fields">
+              <dt>Name</dt>
+              <dd>{patient.name?.value ?? "-"}</dd>
+              <dt>Date of birth</dt>
+              <dd>{patient.dob?.value ?? "-"}</dd>
+              <dt>Triage</dt>
+              <dd>{patient.triage ? <span className={`badge triage-${patient.triage.value}`}>{patient.triage.value}</span> : "-"}</dd>
+              <dt>Latest vitals</dt>
+              <dd>{latestVitals ? formatVitals(latestVitals) : "-"}</dd>
+            </dl>
+          </section>
+          <section className="card">
+            <h2>Transfer legs</h2>
+            <ul className="legs leg-list">
+              {incident.legs.map((leg) => (
+                <li key={leg.legId} className="leg">
+                  {resourceName(leg.resourceId)}:{" "}
+                  <span className={isActive(leg) ? "badge state-active" : "badge state-closed"}>
+                    {isActive(leg) ? "Active" : "Completed"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
+        <div className="detail-main">
+          <section className="card">
+            <div className="view-toggle" role="group" aria-label="View">
+              <button type="button" aria-pressed={view === "feed"} onClick={() => setView("feed")}>
+                Feed
+              </button>
+              <button type="button" aria-pressed={view === "log"} onClick={() => setView("log")}>
+                My Event log
+              </button>
+            </div>
+            {view === "feed" ? (
+              <ol className="feed">
+                {events.map((e) => (
+                  <li key={e.eventId}>
+                    <span className="muted">{new Date(e.enteredAt).toLocaleTimeString()}</span> <strong>{sourceLabel(e, resourceName)}</strong>:{" "}
+                    {describeEvent(e)}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <ol className="feed">
+                {props.log.length === 0 && <li className="muted">No events from this Device yet.</li>}
+                {props.log.map(({ seq, event }) => (
+                  <li key={event.eventId}>
+                    <span className="muted">
+                      #{seq} {new Date(event.enteredAt).toLocaleTimeString()}
+                    </span>{" "}
+                    {describeEvent(event)} ({seq <= props.offset ? "stored" : "waiting"})
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+          {leg && (
+            // Closed is the Coordinator's: no leg is Active. With my own leg completed I can still edit until then.
+            <Composer
+              incidentId={incident.incidentId}
+              patientId={incident.patientId}
+              device={{ ...props.device, legId: leg.legId }}
+              clock={Date.now}
+              holdsActiveLeg={activeLeg !== undefined}
+              locked={incident.closed}
+              onEvent={props.onEvent}
+            />
+          )}
+        </div>
       </div>
-      {view === "feed" ? (
-        <ol>
-          {events.map((e) => (
-            <li key={e.eventId}>
-              {new Date(e.enteredAt).toLocaleTimeString()} {sourceLabel(e, resourceName)}: {describeEvent(e)}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <ol>
-          {props.log.length === 0 && <li>No events from this Device yet.</li>}
-          {props.log.map(({ seq, event }) => (
-            <li key={event.eventId}>
-              #{seq} {new Date(event.enteredAt).toLocaleTimeString()} {describeEvent(event)} ({seq <= props.offset ? "stored" : "waiting"})
-            </li>
-          ))}
-        </ol>
-      )}
-      {leg && (
-        // Closed is the Coordinator's: no leg is Active. With my own leg completed I can still edit until then.
-        <Composer
-          incidentId={incident.incidentId}
-          patientId={incident.patientId}
-          device={{ ...props.device, legId: leg.legId }}
-          clock={Date.now}
-          holdsActiveLeg={activeLeg !== undefined}
-          locked={incident.closed}
-          onEvent={props.onEvent}
-        />
-      )}
-    </section>
+    </>
+  );
+}
+
+function GridIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="4" y="4" width="6" height="6" rx="1" />
+      <rect x="14" y="4" width="6" height="6" rx="1" />
+      <rect x="4" y="14" width="6" height="6" rx="1" />
+      <rect x="14" y="14" width="6" height="6" rx="1" />
+    </svg>
+  );
+}
+
+function TruckIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M3 6h11v10H3zM14 9h4l3 3v4h-7" strokeLinejoin="round" />
+      <circle cx="7" cy="17.5" r="1.8" />
+      <circle cx="17" cy="17.5" r="1.8" />
+      <path d="M8.5 9v4M6.5 11h4" />
+    </svg>
+  );
+}
+
+function WifiIcon({ off }: { off: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.5 16a5 5 0 0 1 7 0" />
+      <circle cx="12" cy="19" r="1" fill="currentColor" />
+      {off && <path d="M4 4l16 16" />}
+    </svg>
   );
 }
 
