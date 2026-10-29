@@ -39,13 +39,12 @@ There are no conflict marks and no settle entries.
 
 Open tickets on the map:
 
-- [Coordinator tables and event application](https://github.com/duykhiem/mini-opr/issues/8)
 - [Screen layout for EOC, Device and Coordinator pages](https://github.com/duykhiem/mini-opr/issues/9)
 - [Channels for the EOC and Coordinator pages](https://github.com/duykhiem/mini-opr/issues/10)
+- [Testing strategy](https://github.com/duykhiem/mini-opr/issues/12)
 
 Not yet specified:
 
-- Testing strategy.
 - Seed data, and what Reset clears.
 - Running it: one command to start the frontend and the Coordinator; whether it is deployed anywhere.
 - Build order.
